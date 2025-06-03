@@ -101,7 +101,7 @@ class PublicDataAPI:
             self.logger.error(error_msg)
             return False, error_msg
     
-    def get_apt_subscription_list(self, max_rows: int = 50, filters: Dict = None) -> List[Dict]:
+    def get_apt_subscription_list(self, max_rows: int = 150, filters: Dict = None) -> List[Dict]:
         """
         APT 분양정보 목록 조회
         Args:
@@ -113,6 +113,7 @@ class PublicDataAPI:
         subscription_list = []
         
         try:
+            max_rows = 150
             self.logger.info(f"APT 분양정보 목록 조회 시작 (최대 {max_rows}건)")
             
             # 기본 파라미터
@@ -176,7 +177,7 @@ class PublicDataAPI:
         
         return subscription_list
     
-    def get_officetel_subscription_list(self, max_rows: int = 50, filters: Dict = None) -> List[Dict]:
+    def get_officetel_subscription_list(self, max_rows: int = 150, filters: Dict = None) -> List[Dict]:
         """
         오피스텔/도시형/민간임대 분양정보 목록 조회
         Args:
@@ -232,7 +233,7 @@ class PublicDataAPI:
             self.logger.error(f"오피스텔 분양정보 조회 오류: {e}")
             raise
     
-    def get_comprehensive_data(self, max_rows: int = 50, filters: Dict = None) -> Dict[str, List[Dict]]:
+    def get_comprehensive_data(self, max_rows: int = 150, filters: Dict = None) -> Dict[str, List[Dict]]:
         """
         종합 분양정보 조회 (APT + 오피스텔 + 기타)
         Args:

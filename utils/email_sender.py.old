@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-이메일 전송 모듈 (네이버 API 결과 포함)
+이메일 전송 모듈
 파일명: utils/email_sender.py
 작성자: 청약 자동화 시스템
-설명: Gmail SMTP를 통한 이메일 전송 및 파일 첨부, 네이버 API 결과 포함
+설명: Gmail SMTP를 통한 이메일 전송 및 파일 첨부
 """
 
 import smtplib
@@ -74,17 +74,15 @@ class EmailSender:
                                app_password: str,
                                recipients: List[str], 
                                excel_file_path: str,
-                               data_summary: Dict,
-                               naver_results: Optional[Dict] = None) -> Tuple[bool, str]:
+                               data_summary: Dict) -> Tuple[bool, str]:
         """
-        청약 분양정보 이메일 전송 (네이버 API 결과 포함)
+        청약 분양정보 이메일 전송
         Args:
             sender_email (str): 발신자 이메일
             app_password (str): Gmail 앱 비밀번호  
             recipients (List[str]): 수신자 이메일 목록
             excel_file_path (str): 첨부할 엑셀 파일 경로
             data_summary (Dict): 데이터 요약 정보
-            naver_results (Optional[Dict]): 네이버 API 결과
         Returns:
             Tuple[bool, str]: (성공여부, 메시지)
         """
@@ -96,8 +94,7 @@ class EmailSender:
                 sender_email, 
                 recipients, 
                 excel_file_path, 
-                data_summary,
-                naver_results
+                data_summary
             )
             
             # SMTP 서버 연결 및 전송
@@ -123,8 +120,7 @@ class EmailSender:
                              sender_email: str, 
                              recipients: List[str], 
                              excel_file_path: str,
-                             data_summary: Dict,
-                             naver_results: Optional[Dict] = None) -> MIMEMultipart:
+                             data_summary: Dict) -> MIMEMultipart:
         """
         이메일 메시지 생성
         Args:
@@ -132,7 +128,6 @@ class EmailSender:
             recipients (List[str]): 수신자 목록
             excel_file_path (str): 엑셀 파일 경로
             data_summary (Dict): 데이터 요약 정보
-            naver_results (Optional[Dict]): 네이버 API 결과
         Returns:
             MIMEMultipart: 이메일 메시지 객체
         """
@@ -142,16 +137,11 @@ class EmailSender:
         # 이메일 헤더 설정
         msg['From'] = sender_email
         msg['To'] = ', '.join(recipients)
-        
-        # 네이버 API 결과 포함 여부에 따른 제목 설정
-        if naver_results:
-            msg['Subject'] = f"🏠 청약 분양정보 + 시장분석 업데이트 - {datetime.now().strftime('%Y년 %m월 %d일')}"
-        else:
-            msg['Subject'] = f"🏠 청약 분양정보 업데이트 - {datetime.now().strftime('%Y년 %m월 %d일')}"
+        msg['Subject'] = f"🏠 청약 분양정보 업데이트 - {datetime.now().strftime('%Y년 %m월 %d일')}"
         
         # 이메일 본문 생성
-        html_body = self._create_html_body(data_summary, excel_file_path, naver_results)
-        text_body = self._create_text_body(data_summary, naver_results)
+        html_body = self._create_html_body(data_summary, excel_file_path)
+        text_body = self._create_text_body(data_summary)
         
         # 본문 첨부
         part1 = MIMEText(text_body, 'plain', 'utf-8')
@@ -167,17 +157,16 @@ class EmailSender:
         
         return msg
     
-    def _create_html_body(self, data_summary: Dict, excel_file_path: str, naver_results: Optional[Dict] = None) -> str:
+    def _create_html_body(self, data_summary: Dict, excel_file_path: str) -> str:
         """
-        HTML 이메일 본문 생성 (네이버 API 결과 포함)
+        HTML 이메일 본문 생성
         Args:
             data_summary (Dict): 데이터 요약 정보
             excel_file_path (str): 엑셀 파일 경로
-            naver_results (Optional[Dict]): 네이버 API 결과
         Returns:
             str: HTML 본문
         """
-        # 기본 통계 계산
+        # 통계 계산
         total_count = sum(len(data_list) for data_list in data_summary.values() if isinstance(data_list, list))
         general_count = len(data_summary.get('general', []))
         apt_count = len(data_summary.get('apt', []))
@@ -186,11 +175,40 @@ class EmailSender:
         # 파일명 추출
         filename = os.path.basename(excel_file_path) if excel_file_path else "분양정보.xlsx"
         
-        # 최신 분양정보 HTML 생성
-        recent_items_html = self._generate_recent_items_html(data_summary)
+        # 최신 분양정보 (상위 5개)
+        recent_items = []
+        all_items = []
         
-        # 네이버 API 결과 HTML 생성
-        naver_section_html = self._generate_naver_analysis_html(naver_results) if naver_results else ""
+        for category, items in data_summary.items():
+            if isinstance(items, list):
+                for item in items:
+                    item_with_category = item.copy()
+                    item_with_category['분양유형'] = {
+                        'general': '일반분양',
+                        'apt': 'APT분양',
+                        'officetel': '오피스텔분양'
+                    }.get(category, category)
+                    all_items.append(item_with_category)
+        
+        # 최신순 정렬
+        try:
+            all_items.sort(key=lambda x: x.get('모집공고일', ''), reverse=True)
+            recent_items = all_items[:5]
+        except:
+            recent_items = all_items[:5]
+        
+        # 최신 분양정보 HTML 생성
+        recent_items_html = ""
+        for i, item in enumerate(recent_items, 1):
+            recent_items_html += f"""
+            <tr style="background-color: {'#f9f9f9' if i % 2 == 0 else '#ffffff'};">
+                <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">{i}</td>
+                <td style="padding: 8px; border: 1px solid #ddd;">{item.get('분양유형', '')}</td>
+                <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">{item.get('주택명', '')}</td>
+                <td style="padding: 8px; border: 1px solid #ddd;">{item.get('공급지역', '')}</td>
+                <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">{item.get('모집공고일', '')}</td>
+            </tr>
+            """
         
         html_body = f"""
         <!DOCTYPE html>
@@ -204,10 +222,9 @@ class EmailSender:
                     color: #333;
                     margin: 0;
                     padding: 20px;
-                    background-color: #f5f5f5;
                 }}
                 .container {{
-                    max-width: 900px;
+                    max-width: 800px;
                     margin: 0 auto;
                     background-color: #ffffff;
                     border-radius: 10px;
@@ -222,7 +239,7 @@ class EmailSender:
                 }}
                 .header h1 {{
                     margin: 0;
-                    font-size: 26px;
+                    font-size: 24px;
                     font-weight: bold;
                 }}
                 .content {{ 
@@ -280,87 +297,10 @@ class EmailSender:
                     padding: 12px 8px;
                     text-align: center;
                     font-weight: bold;
-                    font-size: 14px;
                 }}
                 .recent-table td {{
                     padding: 8px;
                     border: 1px solid #ddd;
-                    font-size: 13px;
-                }}
-                .naver-section {{
-                    background-color: #f0f8ff;
-                    border: 1px solid #4F81BD;
-                    border-radius: 10px;
-                    margin: 30px 0;
-                    padding: 0;
-                    overflow: hidden;
-                }}
-                .naver-header {{
-                    background: linear-gradient(135deg, #2DB400 0%, #4FD400 100%);
-                    color: white;
-                    padding: 15px 20px;
-                    font-size: 18px;
-                    font-weight: bold;
-                }}
-                .naver-content {{
-                    padding: 20px;
-                }}
-                .analysis-grid {{
-                    display: grid;
-                    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-                    gap: 20px;
-                    margin: 20px 0;
-                }}
-                .analysis-card {{
-                    background-color: white;
-                    border: 1px solid #e0e0e0;
-                    border-radius: 8px;
-                    padding: 15px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-                }}
-                .analysis-card h4 {{
-                    margin-top: 0;
-                    color: #2DB400;
-                    font-size: 16px;
-                    border-bottom: 2px solid #2DB400;
-                    padding-bottom: 5px;
-                }}
-                .news-item {{
-                    background-color: #f9f9f9;
-                    border-left: 3px solid #2DB400;
-                    padding: 10px 15px;
-                    margin: 10px 0;
-                    border-radius: 0 5px 5px 0;
-                }}
-                .news-title {{
-                    font-weight: bold;
-                    color: #333;
-                    margin-bottom: 5px;
-                    font-size: 14px;
-                }}
-                .news-date {{
-                    color: #666;
-                    font-size: 12px;
-                    margin-bottom: 5px;
-                }}
-                .news-desc {{
-                    color: #555;
-                    font-size: 13px;
-                    line-height: 1.4;
-                }}
-                .keywords {{
-                    display: flex;
-                    flex-wrap: wrap;
-                    gap: 5px;
-                    margin: 10px 0;
-                }}
-                .keyword-tag {{
-                    background-color: #2DB400;
-                    color: white;
-                    padding: 4px 8px;
-                    border-radius: 12px;
-                    font-size: 11px;
-                    font-weight: bold;
                 }}
                 .footer {{
                     background-color: #f8f9fa;
@@ -381,35 +321,19 @@ class EmailSender:
                     font-size: 18px;
                     margin-right: 10px;
                 }}
-                .highlight-box {{
-                    background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
-                    border: 1px solid #ffc107;
-                    border-radius: 8px;
-                    padding: 15px;
-                    margin: 15px 0;
-                }}
-                .trend-stat {{
-                    display: inline-block;
-                    background-color: #4F81BD;
-                    color: white;
-                    padding: 8px 12px;
-                    border-radius: 5px;
-                    margin: 5px;
-                    font-weight: bold;
-                }}
             </style>
         </head>
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>🏠 청약 분양정보{'+ 시장분석' if naver_results else ''} 업데이트</h1>
+                    <h1>🏠 청약 분양정보 업데이트</h1>
                     <p style="margin: 10px 0 0 0; opacity: 0.9;">
                         {datetime.now().strftime('%Y년 %m월 %d일 %H시 %M분')} 기준
                     </p>
                 </div>
                 
                 <div class="content">
-                    <p>안녕하세요! 최신 청약 분양정보{'와 시장 분석 결과' if naver_results else ''}를 전달드립니다.</p>
+                    <p>안녕하세요! 최신 청약 분양정보를 전달드립니다.</p>
                     
                     <div class="summary">
                         <h3>📊 분양정보 요약</h3>
@@ -433,9 +357,23 @@ class EmailSender:
                         </div>
                     </div>
                     
-                    {recent_items_html}
-                    
-                    {naver_section_html}
+                    {f'''
+                    <h3 style="color: #4F81BD; margin-top: 30px;">🏠 최신 분양정보 (상위 5개)</h3>
+                    <table class="recent-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 60px;">순번</th>
+                                <th style="width: 100px;">분양유형</th>
+                                <th style="width: 200px;">주택명</th>
+                                <th style="width: 150px;">공급지역</th>
+                                <th style="width: 100px;">모집공고일</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {recent_items_html}
+                        </tbody>
+                    </table>
+                    ''' if recent_items else '<p style="color: #666; text-align: center; padding: 20px;">표시할 분양정보가 없습니다.</p>'}
                     
                     <div class="attachment">
                         <span class="attachment-icon">📎</span>
@@ -463,187 +401,11 @@ class EmailSender:
         
         return html_body
     
-    def _generate_recent_items_html(self, data_summary: Dict) -> str:
-        """최신 분양정보 HTML 생성"""
-        # 최신 분양정보 (상위 5개)
-        all_items = []
-        
-        for category, items in data_summary.items():
-            if isinstance(items, list):
-                for item in items:
-                    item_with_category = item.copy()
-                    item_with_category['분양유형'] = {
-                        'general': '일반분양',
-                        'apt': 'APT분양',
-                        'officetel': '오피스텔분양'
-                    }.get(category, category)
-                    all_items.append(item_with_category)
-        
-        # 최신순 정렬
-        try:
-            all_items.sort(key=lambda x: x.get('모집공고일', ''), reverse=True)
-            recent_items = all_items[:5]
-        except:
-            recent_items = all_items[:5]
-        
-        if not recent_items:
-            return '<p style="color: #666; text-align: center; padding: 20px;">표시할 분양정보가 없습니다.</p>'
-        
-        # 최신 분양정보 HTML 생성
-        recent_items_html = ""
-        for i, item in enumerate(recent_items, 1):
-            recent_items_html += f"""
-            <tr style="background-color: {'#f9f9f9' if i % 2 == 0 else '#ffffff'};">
-                <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">{i}</td>
-                <td style="padding: 8px; border: 1px solid #ddd;">{item.get('분양유형', '')}</td>
-                <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">{item.get('주택명', '')}</td>
-                <td style="padding: 8px; border: 1px solid #ddd;">{item.get('공급지역', '')}</td>
-                <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">{item.get('모집공고일', '')}</td>
-            </tr>
-            """
-        
-        return f'''
-        <h3 style="color: #4F81BD; margin-top: 30px;">🏠 최신 분양정보 (상위 5개)</h3>
-        <table class="recent-table">
-            <thead>
-                <tr>
-                    <th style="width: 60px;">순번</th>
-                    <th style="width: 100px;">분양유형</th>
-                    <th style="width: 200px;">주택명</th>
-                    <th style="width: 150px;">공급지역</th>
-                    <th style="width: 100px;">모집공고일</th>
-                </tr>
-            </thead>
-            <tbody>
-                {recent_items_html}
-            </tbody>
-        </table>
-        '''
-    
-    def _generate_naver_analysis_html(self, naver_results: Dict) -> str:
-        """네이버 API 분석 결과 HTML 생성"""
-        if not naver_results:
-            return ""
-        
-        analysis_cards = []
-        
-        # 뉴스 검색 결과
-        if 'news_search' in naver_results and naver_results['news_search']:
-            news_html = ""
-            for news in naver_results['news_search'][:3]:  # 상위 3개만
-                title = news.get('title', '').replace('<b>', '').replace('</b>', '')
-                news_html += f"""
-                <div class="news-item">
-                    <div class="news-title">{title}</div>
-                    <div class="news-date">📅 {news.get('pubDate', 'N/A')}</div>
-                    <div class="news-desc">{news.get('description', '')[:100]}...</div>
-                </div>
-                """
-            
-            analysis_cards.append(f"""
-            <div class="analysis-card">
-                <h4>📰 관련 뉴스</h4>
-                <p><strong>총 {len(naver_results['news_search'])}건</strong>의 뉴스가 검색되었습니다.</p>
-                {news_html}
-            </div>
-            """)
-        
-        # 시장 동향 분석
-        if 'market_trends' in naver_results and naver_results['market_trends']:
-            trends = naver_results['market_trends']
-            keywords_html = ""
-            
-            keywords = trends.get('market_keywords', [])
-            if keywords:
-                for keyword in keywords[:8]:  # 상위 8개
-                    keywords_html += f'<span class="keyword-tag">{keyword}</span>'
-            
-            latest_news_html = ""
-            latest_news = trends.get('latest_news', [])
-            if latest_news:
-                for news in latest_news[:2]:  # 상위 2개
-                    title = news.get('title', '').replace('<b>', '').replace('</b>', '')
-                    latest_news_html += f"""
-                    <div class="news-item">
-                        <div class="news-title">{title}</div>
-                        <div class="news-date">📅 {news.get('pubDate', 'N/A')}</div>
-                    </div>
-                    """
-            
-            analysis_cards.append(f"""
-            <div class="analysis-card">
-                <h4>📈 시장 동향 분석</h4>
-                <div class="highlight-box">
-                    <span class="trend-stat">뉴스 {trends.get('news_count', 0)}건</span>
-                    <span class="trend-stat">블로그 {trends.get('blog_count', 0)}건</span>
-                </div>
-                
-                {f'<p><strong>🔑 주요 키워드:</strong></p><div class="keywords">{keywords_html}</div>' if keywords else ''}
-                
-                {f'<p><strong>📰 최신 관련 뉴스:</strong></p>{latest_news_html}' if latest_news else ''}
-            </div>
-            """)
-        
-        # 종합 분석 보고서
-        if 'comprehensive_report' in naver_results and naver_results['comprehensive_report']:
-            report = naver_results['comprehensive_report']
-            summary = report.get('summary', {})
-            
-            regional_html = ""
-            regional_analysis = report.get('regional_analysis', {})
-            if regional_analysis:
-                for region, data in list(regional_analysis.items())[:3]:  # 상위 3개 지역
-                    regional_html += f"""
-                    <div style="margin: 10px 0; padding: 10px; background-color: #f9f9f9; border-radius: 5px;">
-                        <strong>📍 {region}</strong><br>
-                        <small>뉴스 {data.get('news_count', 0)}건, 블로그 {data.get('blog_count', 0)}건</small>
-                    </div>
-                    """
-            
-            hot_keywords_html = ""
-            hot_keywords = summary.get('hot_keywords', [])
-            if hot_keywords:
-                for keyword in hot_keywords[:6]:
-                    hot_keywords_html += f'<span class="keyword-tag">{keyword}</span>'
-            
-            analysis_cards.append(f"""
-            <div class="analysis-card">
-                <h4>🔍 종합 분석 보고서</h4>
-                <div class="highlight-box">
-                    <p><strong>📋 요약:</strong></p>
-                    <p>• 총 분양 건수: <strong>{summary.get('total_subscriptions', 0)}건</strong></p>
-                    <p>• 분석 지역: <strong>{len(summary.get('analyzed_regions', []))}개 지역</strong></p>
-                </div>
-                
-                {f'<p><strong>🔥 핫 키워드:</strong></p><div class="keywords">{hot_keywords_html}</div>' if hot_keywords else ''}
-                
-                {f'<p><strong>🌍 지역별 분석:</strong></p>{regional_html}' if regional_html else ''}
-            </div>
-            """)
-        
-        if not analysis_cards:
-            return ""
-        
-        return f"""
-        <div class="naver-section">
-            <div class="naver-header">
-                🔍 네이버 API 시장 분석 결과
-            </div>
-            <div class="naver-content">
-                <p>네이버 검색 API를 통해 수집한 시장 동향과 관련 뉴스를 분석한 결과입니다.</p>
-                <div class="analysis-grid">
-                    {''.join(analysis_cards)}
-                </div>
-            </div>
-        </div>
+    def _create_text_body(self, data_summary: Dict) -> str:
         """
-    
-    def _create_text_body(self, data_summary: Dict, naver_results: Optional[Dict] = None) -> str:
-        """
-        텍스트 이메일 본문 생성 (네이버 API 결과 포함)
+        텍스트 이메일 본문 생성 (HTML을 지원하지 않는 이메일 클라이언트용)
         Args:
             data_summary (Dict): 데이터 요약 정보
-            naver_results (Optional[Dict]): 네이버 API 결과
         Returns:
             str: 텍스트 본문
         """
@@ -652,51 +414,17 @@ class EmailSender:
         apt_count = len(data_summary.get('apt', []))
         officetel_count = len(data_summary.get('officetel', []))
         
-        # 네이버 API 결과 텍스트 생성
-        naver_text = ""
-        if naver_results:
-            naver_text = "\n\n🔍 네이버 API 시장 분석 결과\n" + "="*40 + "\n"
-            
-            # 뉴스 검색 결과
-            if 'news_search' in naver_results and naver_results['news_search']:
-                naver_text += f"\n📰 관련 뉴스: {len(naver_results['news_search'])}건\n"
-                for i, news in enumerate(naver_results['news_search'][:3], 1):
-                    title = news.get('title', '').replace('<b>', '').replace('</b>', '')
-                    naver_text += f"{i}. {title}\n   📅 {news.get('pubDate', 'N/A')}\n"
-            
-            # 시장 동향
-            if 'market_trends' in naver_results and naver_results['market_trends']:
-                trends = naver_results['market_trends']
-                naver_text += f"\n📈 시장 동향 분석\n"
-                naver_text += f"뉴스: {trends.get('news_count', 0)}건, 블로그: {trends.get('blog_count', 0)}건\n"
-                
-                keywords = trends.get('market_keywords', [])
-                if keywords:
-                    naver_text += f"주요 키워드: {', '.join(keywords[:5])}\n"
-            
-            # 종합 분석
-            if 'comprehensive_report' in naver_results and naver_results['comprehensive_report']:
-                report = naver_results['comprehensive_report']
-                summary = report.get('summary', {})
-                naver_text += f"\n🔍 종합 분석\n"
-                naver_text += f"분석 지역: {len(summary.get('analyzed_regions', []))}개\n"
-                
-                hot_keywords = summary.get('hot_keywords', [])
-                if hot_keywords:
-                    naver_text += f"핫 키워드: {', '.join(hot_keywords[:5])}\n"
-        
         text_body = f"""
-청약 분양정보{'+ 시장분석' if naver_results else ''} 업데이트
+청약 분양정보 업데이트
 {datetime.now().strftime('%Y년 %m월 %d일 %H시 %M분')} 기준
 
-안녕하세요! 최신 청약 분양정보{'와 시장 분석 결과' if naver_results else ''}를 전달드립니다.
+안녕하세요! 최신 청약 분양정보를 전달드립니다.
 
 📊 분양정보 요약
 - 총 분양건수: {total_count}건
 - 일반분양: {general_count}건  
 - APT분양: {apt_count}건
 - 오피스텔분양: {officetel_count}건
-{naver_text}
 
 자세한 정보는 첨부된 엑셀 파일을 확인해주세요.
 

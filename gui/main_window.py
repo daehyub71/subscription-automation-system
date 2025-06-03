@@ -63,6 +63,7 @@ except ImportError:
         def _create_default_config(self):
             return {
                 'api': {'service_key': '', 'max_rows': 50},
+                'naver_api': {'enabled': False, 'client_id': '', 'client_secret': ''},
                 'email': {'sender_email': '', 'app_password': '', 'recipients': []},
                 'kakao': {'enabled': False, 'api_key': ''},
                 'schedule': {'enabled': False, 'time': '09:00'}
@@ -139,6 +140,11 @@ class SubscriptionGUI:
         self.config_manager = ConfigManager()
         self.config_data = {}
         
+        # 네이버 API 변수들 초기화
+        self.naver_enabled_var = tk.BooleanVar()
+        self.naver_client_id_var = tk.StringVar()
+        self.naver_client_secret_var = tk.StringVar()
+        
         # 로깅 설정
         self.setup_logging()
         
@@ -154,7 +160,7 @@ class SubscriptionGUI:
     def setup_window(self):
         """메인 창 설정"""
         self.root.title("🏠 청약 분양정보 자동화 시스템 v1.0")
-        self.root.geometry("800x700")
+        self.root.geometry("800x800")  # 높이 증가
         self.root.resizable(True, True)
         
         # 창 아이콘 설정 (선택사항)
@@ -203,7 +209,7 @@ class SubscriptionGUI:
             self.config_data = self.config_manager.load_config()
             
             # UI에 설정 반영
-            self.load_config_to_ui()
+            self.load_config_to_ui_with_naver()
             
         except Exception as e:
             self.log_message(f"❌ 설정 불러오기 오류: {e}")
@@ -211,12 +217,19 @@ class SubscriptionGUI:
             messagebox.showerror("설정 불러오기 실패", 
                                f"설정을 불러오는 중 오류가 발생했습니다.\n기본 설정으로 초기화됩니다.\n\n오류: {e}")
     
-    def load_config_to_ui(self):
-        """설정 데이터를 UI에 로드"""
+    def load_config_to_ui_with_naver(self):
+        """설정 데이터를 UI에 로드 (네이버 API 포함)"""
         try:
             # API 설정
             api_config = self.config_data.get('api', {})
             self.api_key_var.set(api_config.get('service_key', ''))
+            
+            # 네이버 API 설정 로드
+            naver_config = self.config_data.get('naver_api', {})
+            self.naver_enabled_var.set(naver_config.get('enabled', False))
+            self.naver_client_id_var.set(naver_config.get('client_id', ''))
+            self.naver_client_secret_var.set(naver_config.get('client_secret', ''))
+            self.toggle_naver_settings()
             
             # 이메일 설정
             email_config = self.config_data.get('email', {})
@@ -242,7 +255,7 @@ class SubscriptionGUI:
             self.schedule_time_var.set(schedule_config.get('time', '09:00'))
             self.toggle_schedule_settings()
             
-            self.log_message("✅ 설정 UI 로드 완료")
+            self.log_message("✅ 설정 UI 로드 완료 (네이버 API 포함)")
             
         except Exception as e:
             self.log_message(f"❌ UI 로드 오류: {e}")
@@ -270,6 +283,10 @@ class SubscriptionGUI:
         self.create_api_section(main_frame, current_row)
         current_row += 3
         
+        # 네이버 API 설정 섹션 추가
+        self.create_naver_api_section(main_frame, current_row)
+        current_row += 4  # 네이버 API 섹션 추가로 인한 행 수 증가
+        
         # 이메일 설정 섹션
         self.create_email_section(main_frame, current_row)
         current_row += 5
@@ -282,9 +299,9 @@ class SubscriptionGUI:
         self.create_execution_section(main_frame, current_row)
         current_row += 3
         
-        # 버튼 섹션
-        self.create_button_section(main_frame, current_row)
-        current_row += 2
+        # 버튼 섹션 (강화된 버전 사용)
+        self.create_enhanced_button_section(main_frame, current_row)
+        current_row += 3  # 버튼 행 수 증가
         
         # 진행상태 섹션
         self.create_progress_section(main_frame, current_row)
@@ -312,6 +329,45 @@ class SubscriptionGUI:
         # API 테스트 버튼
         self.test_api_btn = ttk.Button(parent, text="테스트", command=self.test_api_connection)
         self.test_api_btn.grid(row=start_row+2, column=2, padx=(5, 0))
+    
+    def create_naver_api_section(self, parent, start_row):
+        """네이버 API 설정 섹션 생성"""
+        # 네이버 API 설정 레이블
+        naver_label = ttk.Label(parent, text="🔍 네이버 API 설정 (선택사항)", font=('맑은 고딕', 12, 'bold'))
+        naver_label.grid(row=start_row, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        
+        # 구분선
+        separator = ttk.Separator(parent, orient='horizontal')
+        separator.grid(row=start_row+1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # 네이버 API 활성화 체크박스
+        self.naver_enabled_check = ttk.Checkbutton(parent, text="네이버 API 사용", 
+                                                variable=self.naver_enabled_var,
+                                                command=self.toggle_naver_settings)
+        self.naver_enabled_check.grid(row=start_row+2, column=0, sticky=tk.W, padx=(20, 5))
+        
+        # Client ID
+        ttk.Label(parent, text="Client ID:").grid(row=start_row+2, column=1, sticky=tk.W, padx=(20, 5))
+        self.naver_client_id_entry = ttk.Entry(parent, textvariable=self.naver_client_id_var, width=25)
+        self.naver_client_id_entry.grid(row=start_row+2, column=2, sticky=(tk.W, tk.E), padx=5)
+        
+        # Client Secret
+        ttk.Label(parent, text="Client Secret:").grid(row=start_row+3, column=0, sticky=tk.W, padx=(20, 5))
+        self.naver_client_secret_entry = ttk.Entry(parent, textvariable=self.naver_client_secret_var, width=25, show="*")
+        self.naver_client_secret_entry.grid(row=start_row+3, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5)
+        
+        # 초기에는 비활성화
+        self.naver_client_id_entry.config(state='disabled')
+        self.naver_client_secret_entry.config(state='disabled')
+
+    def toggle_naver_settings(self):
+        """네이버 API 설정 활성화/비활성화"""
+        if self.naver_enabled_var.get():
+            self.naver_client_id_entry.config(state='normal')
+            self.naver_client_secret_entry.config(state='normal')
+        else:
+            self.naver_client_id_entry.config(state='disabled')
+            self.naver_client_secret_entry.config(state='disabled')
     
     def create_email_section(self, parent, start_row):
         """이메일 설정 섹션 생성"""
@@ -410,31 +466,29 @@ class SubscriptionGUI:
         
         ttk.Label(parent, text="매일").grid(row=start_row+2, column=2, sticky=tk.W, padx=(80, 5))
     
-    def create_button_section(self, parent, start_row):
-        """버튼 섹션 생성"""
+    def create_enhanced_button_section(self, parent, start_row):
+        """강화된 버튼 섹션 (네이버 API 기능 포함)"""
         # 버튼 프레임
         button_frame = ttk.Frame(parent)
         button_frame.grid(row=start_row, column=0, columnspan=3, pady=20)
         
-        # 실행 버튼
+        # 첫 번째 줄 버튼들
         self.run_btn = ttk.Button(button_frame, text="🚀 실행", command=self.run_system, 
-                                 style='Accent.TButton', width=12)
+                                style='Accent.TButton', width=12)
         self.run_btn.grid(row=0, column=0, padx=5)
         
-        # 설정 저장 버튼
-        ttk.Button(button_frame, text="💾 설정저장", command=self.save_settings, width=12).grid(row=0, column=1, padx=5)
-        
-        # 설정 불러오기 버튼
+        ttk.Button(button_frame, text="💾 설정저장", command=self.save_settings_with_naver, width=12).grid(row=0, column=1, padx=5)
         ttk.Button(button_frame, text="📁 설정불러오기", command=self.safe_load_settings, width=12).grid(row=0, column=2, padx=5)
-        
-        # 엑셀 테스트 버튼
         ttk.Button(button_frame, text="📊 엑셀테스트", command=self.test_excel_creation, width=12).grid(row=0, column=3, padx=5)
         
-        # 설정 파일 수정 버튼
-        ttk.Button(button_frame, text="🔧 설정수정", command=self.fix_config_file, width=12).grid(row=1, column=0, padx=5, pady=5)
+        # 두 번째 줄 - 네이버 API 기능들
+        ttk.Button(button_frame, text="📰 뉴스검색", command=self.search_related_news, width=12).grid(row=1, column=0, padx=5, pady=5)
+        ttk.Button(button_frame, text="📈 시장동향", command=self.analyze_market_trends, width=12).grid(row=1, column=1, padx=5, pady=5)
+        ttk.Button(button_frame, text="🔍 종합분석", command=self.comprehensive_analysis, width=12).grid(row=1, column=2, padx=5, pady=5)
+        ttk.Button(button_frame, text="🔧 설정수정", command=self.fix_config_file, width=12).grid(row=1, column=3, padx=5, pady=5)
         
-        # 종료 버튼
-        ttk.Button(button_frame, text="❌ 종료", command=self.on_closing, width=12).grid(row=1, column=4, padx=5)
+        # 세 번째 줄
+        ttk.Button(button_frame, text="❌ 종료", command=self.on_closing, width=12).grid(row=2, column=2, padx=5, pady=5)
     
     def create_progress_section(self, parent, start_row):
         """진행상태 섹션 생성"""
@@ -603,8 +657,8 @@ class SubscriptionGUI:
             messagebox.showerror(f"{test_name} 실패", message)
             self.log_message(f"❌ {test_name} 실패: {message}")
     
-    def save_settings(self):
-        """설정 저장"""
+    def save_settings_with_naver(self):
+        """설정 저장 (네이버 API 포함)"""
         try:
             # 수신자 목록 수집
             recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
@@ -613,6 +667,11 @@ class SubscriptionGUI:
                 'api': {
                     'service_key': self.api_key_var.get().strip(),
                     'max_rows': 50
+                },
+                'naver_api': {
+                    'enabled': self.naver_enabled_var.get(),
+                    'client_id': self.naver_client_id_var.get().strip(),
+                    'client_secret': self.naver_client_secret_var.get().strip()
                 },
                 'email': {
                     'sender_email': self.sender_email_var.get().strip(),
@@ -639,7 +698,7 @@ class SubscriptionGUI:
             # 설정 저장
             if self.config_manager.save_config(config_data):
                 messagebox.showinfo("설정 저장", "설정이 성공적으로 저장되었습니다.")
-                self.log_message("설정 저장 완료")
+                self.log_message("설정 저장 완료 (네이버 API 포함)")
                 self.config_data = config_data
             else:
                 messagebox.showerror("설정 저장 실패", "설정 저장 중 오류가 발생했습니다.")
@@ -648,6 +707,217 @@ class SubscriptionGUI:
             error_msg = f"설정 저장 오류: {str(e)}"
             messagebox.showerror("오류", error_msg)
             self.log_message(error_msg)
+    
+    def search_related_news(self):
+        """관련 뉴스 검색"""
+        if not self.naver_enabled_var.get():
+            messagebox.showwarning("네이버 API", "네이버 API가 비활성화되어 있습니다.")
+            return
+        
+        if not self.naver_client_id_var.get() or not self.naver_client_secret_var.get():
+            messagebox.showerror("설정 오류", "네이버 API 클라이언트 ID와 Secret을 입력해주세요.")
+            return
+        
+        self.log_message("관련 뉴스 검색 시작...")
+        
+        def search_thread():
+            try:
+                from api.subscription_with_naver import SubscriptionNaverIntegration
+                
+                integration = SubscriptionNaverIntegration(
+                    self.naver_client_id_var.get(),
+                    self.naver_client_secret_var.get()
+                )
+                
+                # 샘플 검색 (실제로는 현재 분양정보를 기반으로)
+                news_results = integration.search_related_news("분양", "서울")
+                
+                def show_results():
+                    if news_results:
+                        result_window = tk.Toplevel(self.root)
+                        result_window.title("관련 뉴스 검색 결과")
+                        result_window.geometry("800x600")
+                        
+                        # 스크롤 가능한 텍스트 위젯
+                        text_widget = scrolledtext.ScrolledText(result_window, wrap=tk.WORD)
+                        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+                        
+                        # 결과 표시
+                        text_widget.insert(tk.END, f"📰 관련 뉴스 검색 결과 ({len(news_results)}건)\n")
+                        text_widget.insert(tk.END, "="*60 + "\n\n")
+                        
+                        for i, news in enumerate(news_results[:10], 1):
+                            text_widget.insert(tk.END, f"{i}. {news.get('title', 'N/A')}\n")
+                            text_widget.insert(tk.END, f"   📅 {news.get('pubDate', 'N/A')}\n")
+                            text_widget.insert(tk.END, f"   📝 {news.get('description', 'N/A')[:100]}...\n")
+                            text_widget.insert(tk.END, f"   🔗 {news.get('link', 'N/A')}\n\n")
+                        
+                        text_widget.config(state=tk.DISABLED)
+                        
+                        self.log_message(f"뉴스 검색 완료: {len(news_results)}건")
+                    else:
+                        messagebox.showinfo("검색 결과", "관련 뉴스를 찾을 수 없습니다.")
+                
+                self.root.after(0, show_results)
+                
+            except Exception as e:
+                error_msg = f"뉴스 검색 오류: {str(e)}"
+                self.root.after(0, lambda: messagebox.showerror("오류", error_msg))
+                self.root.after(0, lambda: self.log_message(f"❌ {error_msg}"))
+        
+        threading.Thread(target=search_thread, daemon=True).start()
+
+    def analyze_market_trends(self):
+        """시장 동향 분석"""
+        if not self.naver_enabled_var.get():
+            messagebox.showwarning("네이버 API", "네이버 API가 비활성화되어 있습니다.")
+            return
+        
+        # 지역 선택 대화상자
+        regions = ["서울", "경기", "인천", "부산", "대구", "광주", "대전", "울산", "세종"]
+        
+        region_window = tk.Toplevel(self.root)
+        region_window.title("지역 선택")
+        region_window.geometry("300x200")
+        region_window.transient(self.root)
+        region_window.grab_set()
+        
+        tk.Label(region_window, text="분석할 지역을 선택하세요:", font=('맑은 고딕', 12)).pack(pady=10)
+        
+        selected_region = tk.StringVar(value=regions[0])
+        
+        for region in regions:
+            tk.Radiobutton(region_window, text=region, variable=selected_region, value=region).pack(anchor=tk.W, padx=20)
+        
+        def start_analysis():
+            region = selected_region.get()
+            region_window.destroy()
+            
+            self.log_message(f"{region} 지역 시장 동향 분석 시작...")
+            
+            def analysis_thread():
+                try:
+                    from api.subscription_with_naver import SubscriptionNaverIntegration
+                    
+                    integration = SubscriptionNaverIntegration(
+                        self.naver_client_id_var.get(),
+                        self.naver_client_secret_var.get()
+                    )
+                    
+                    trends = integration.search_market_trends(region)
+                    
+                    def show_trends():
+                        trend_window = tk.Toplevel(self.root)
+                        trend_window.title(f"{region} 시장 동향 분석")
+                        trend_window.geometry("600x500")
+                        
+                        text_widget = scrolledtext.ScrolledText(trend_window, wrap=tk.WORD)
+                        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+                        
+                        # 분석 결과 표시
+                        text_widget.insert(tk.END, f"📈 {region} 지역 시장 동향 분석\n")
+                        text_widget.insert(tk.END, "="*50 + "\n\n")
+                        text_widget.insert(tk.END, f"📊 분석 일시: {trends.get('analysis_date', 'N/A')}\n")
+                        text_widget.insert(tk.END, f"📰 뉴스 건수: {trends.get('news_count', 0)}건\n")
+                        text_widget.insert(tk.END, f"📝 블로그 건수: {trends.get('blog_count', 0)}건\n\n")
+                        
+                        # 주요 키워드
+                        keywords = trends.get('market_keywords', [])
+                        if keywords:
+                            text_widget.insert(tk.END, "🔑 주요 키워드:\n")
+                            text_widget.insert(tk.END, f"   {', '.join(keywords[:10])}\n\n")
+                        
+                        # 최신 뉴스
+                        latest_news = trends.get('latest_news', [])
+                        if latest_news:
+                            text_widget.insert(tk.END, "📰 최신 관련 뉴스:\n")
+                            for i, news in enumerate(latest_news[:5], 1):
+                                text_widget.insert(tk.END, f"{i}. {news.get('title', 'N/A')}\n")
+                                text_widget.insert(tk.END, f"   📅 {news.get('pubDate', 'N/A')}\n\n")
+                        
+                        text_widget.config(state=tk.DISABLED)
+                        
+                        self.log_message(f"{region} 시장 동향 분석 완료")
+                    
+                    self.root.after(0, show_trends)
+                    
+                except Exception as e:
+                    error_msg = f"시장 동향 분석 오류: {str(e)}"
+                    self.root.after(0, lambda: messagebox.showerror("오류", error_msg))
+            
+            threading.Thread(target=analysis_thread, daemon=True).start()
+        
+        tk.Button(region_window, text="분석 시작", command=start_analysis, 
+                bg='#007ACC', fg='white', font=('맑은 고딕', 11)).pack(pady=20)
+
+    def comprehensive_analysis(self):
+        """종합 분석"""
+        if not self.naver_enabled_var.get():
+            messagebox.showwarning("네이버 API", "네이버 API가 비활성화되어 있습니다.")
+            return
+        
+        self.log_message("종합 시장 분석 시작...")
+        
+        def analysis_thread():
+            try:
+                from api.subscription_with_naver import SubscriptionNaverIntegration
+                
+                integration = SubscriptionNaverIntegration(
+                    self.naver_client_id_var.get(),
+                    self.naver_client_secret_var.get()
+                )
+                
+                # 샘플 데이터로 종합 분석
+                sample_data = {
+                    'apt': [{'주택명': '샘플 아파트', '공급지역': '서울'}],
+                    'officetel': []
+                }
+                
+                report = integration.get_comprehensive_market_report(sample_data)
+                
+                def show_report():
+                    report_window = tk.Toplevel(self.root)
+                    report_window.title("종합 시장 분석 보고서")
+                    report_window.geometry("800x700")
+                    
+                    text_widget = scrolledtext.ScrolledText(report_window, wrap=tk.WORD)
+                    text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+                    
+                    # 보고서 내용 표시
+                    text_widget.insert(tk.END, "📊 종합 시장 분석 보고서\n")
+                    text_widget.insert(tk.END, "="*60 + "\n\n")
+                    text_widget.insert(tk.END, f"📅 보고서 작성일: {report.get('report_date', 'N/A')}\n\n")
+                    
+                    # 요약 정보
+                    summary = report.get('summary', {})
+                    text_widget.insert(tk.END, "📋 요약 정보:\n")
+                    text_widget.insert(tk.END, f"   • 총 분양 건수: {summary.get('total_subscriptions', 0)}건\n")
+                    text_widget.insert(tk.END, f"   • 분석 지역 수: {len(summary.get('analyzed_regions', []))}개\n")
+                    
+                    hot_keywords = summary.get('hot_keywords', [])
+                    if hot_keywords:
+                        text_widget.insert(tk.END, f"   • 핫 키워드: {', '.join(hot_keywords[:5])}\n\n")
+                    
+                    # 지역별 분석
+                    regional_analysis = report.get('regional_analysis', {})
+                    if regional_analysis:
+                        text_widget.insert(tk.END, "🌍 지역별 분석:\n")
+                        for region, data in regional_analysis.items():
+                            text_widget.insert(tk.END, f"\n📍 {region}:\n")
+                            text_widget.insert(tk.END, f"   뉴스: {data.get('news_count', 0)}건\n")
+                            text_widget.insert(tk.END, f"   블로그: {data.get('blog_count', 0)}건\n")
+                    
+                    text_widget.config(state=tk.DISABLED)
+                    
+                    self.log_message("종합 분석 보고서 생성 완료")
+                
+                self.root.after(0, show_report)
+                
+            except Exception as e:
+                error_msg = f"종합 분석 오류: {str(e)}"
+                self.root.after(0, lambda: messagebox.showerror("오류", error_msg))
+        
+        threading.Thread(target=analysis_thread, daemon=True).start()
     
     def run_system(self):
         """시스템 실행"""
@@ -691,15 +961,54 @@ class SubscriptionGUI:
             # 분양정보 수집
             data = api.get_comprehensive_data(max_rows=50)
             
-            self.update_progress(50, "엑셀 파일 생성 중...")
+            self.update_progress(40, "엑셀 파일 생성 중...")
             
             # 엑셀 파일 생성
             excel_handler = ExcelHandler()
             excel_file = excel_handler.create_excel_file(data)
             
+            # 네이버 API 분석 (옵션)
+            naver_results = None
+            if self.naver_enabled_var.get() and self.naver_client_id_var.get().strip() and self.naver_client_secret_var.get().strip():
+                try:
+                    self.update_progress(50, "네이버 API 시장 분석 중...")
+                    
+                    from api.subscription_with_naver import SubscriptionNaverIntegration
+                    
+                    integration = SubscriptionNaverIntegration(
+                        self.naver_client_id_var.get().strip(),
+                        self.naver_client_secret_var.get().strip()
+                    )
+                    
+                    naver_results = {}
+                    
+                    # 뉴스 검색
+                    self.update_progress(55, "관련 뉴스 검색 중...")
+                    news_results = integration.search_related_news("분양", "")
+                    if news_results:
+                        naver_results['news_search'] = news_results
+                    
+                    # 시장 동향 분석 (서울 기준)
+                    self.update_progress(60, "시장 동향 분석 중...")
+                    trends = integration.search_market_trends("서울")
+                    if trends:
+                        naver_results['market_trends'] = trends
+                    
+                    # 종합 분석 보고서
+                    self.update_progress(65, "종합 분석 보고서 생성 중...")
+                    report = integration.get_comprehensive_market_report(data)
+                    if report:
+                        naver_results['comprehensive_report'] = report
+                    
+                    self.root.after(0, lambda: self.log_message("✅ 네이버 API 분석 완료"))
+                    
+                except Exception as e:
+                    self.root.after(0, lambda: self.log_message(f"⚠️ 네이버 API 분석 오류: {e}"))
+                    naver_results = None
+            
             self.update_progress(70, "이메일 전송 중...")
             
-            # 이메일 전송
+            # 이메일 전송 (네이버 API 결과 포함)
             email_sender = EmailSender()
             recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
             
@@ -708,7 +1017,8 @@ class SubscriptionGUI:
                 self.app_password_var.get().strip(),
                 recipients,
                 excel_file,
-                data
+                data,
+                naver_results  # 네이버 API 결과 추가
             )
             
             self.update_progress(90, "카카오톡 알림 전송 중...")
@@ -723,7 +1033,8 @@ class SubscriptionGUI:
             
             # 결과 표시
             total_count = sum(len(items) for items in data.values())
-            result_message = f"작업 완료!\n\n수집된 분양정보: {total_count}건\n생성된 파일: {os.path.basename(excel_file)}\n전송된 이메일: {len(recipients)}명"
+            naver_info = "\n네이버 API 시장분석 포함" if naver_results else ""
+            result_message = f"작업 완료!\n\n수집된 분양정보: {total_count}건\n생성된 파일: {os.path.basename(excel_file)}\n전송된 이메일: {len(recipients)}명{naver_info}"
             
             if success:
                 self.root.after(0, lambda: messagebox.showinfo("작업 완료", result_message))
