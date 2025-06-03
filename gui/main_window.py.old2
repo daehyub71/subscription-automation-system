@@ -1,0 +1,281 @@
+# GUI 파일 상단 import 부분 수정 예제
+# gui/main_window.py 파일에서 다음과 같이 수정하세요:
+
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog, scrolledtext
+import threading
+import logging
+import os
+import sys
+from datetime import datetime
+from typing import Dict, List, Optional
+
+# 상위 디렉토리의 모듈 import를 위한 경로 추가
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 새로운 ConfigManager 사용
+from utils.config_manager import ConfigManager
+
+class SubscriptionGUI:
+    """청약 분양정보 자동화 시스템 GUI 클래스"""
+    
+    def __init__(self):
+        """GUI 초기화"""
+        self.root = tk.Tk()
+        self.setup_window()
+        
+        # 새로운 ConfigManager 초기화
+        self.config_manager = ConfigManager()
+        self.config_data = {}
+        
+        # 로깅 설정
+        self.setup_logging()
+        
+        # GUI 컴포넌트 초기화
+        self.create_widgets()
+        
+        # 설정 안전하게 로드 (URL 인코딩 문제 자동 해결)
+        self.safe_load_settings()
+        
+        # 진행상태 변수
+        self.is_running = False
+    
+    def safe_load_settings(self):
+        """설정 안전하게 로드 (URL 인코딩 문제 자동 해결)"""
+        try:
+            self.log_message("설정 파일 로드 시작...")
+            
+            # 새로운 ConfigManager를 사용하여 설정 로드
+            # URL 인코딩 문제가 자동으로 해결됩니다
+            self.config_data = self.config_manager.load_config()
+            
+            # UI에 설정 반영
+            self.load_config_to_ui()
+            
+            self.log_message("✅ 설정 파일 로드 완료")
+            
+        except Exception as e:
+            self.log_message(f"❌ 설정 불러오기 오류: {e}")
+            # 기본 설정 사용
+            self.config_data = self.config_manager._get_default_config()
+            messagebox.showerror("설정 불러오기 실패", 
+                               f"설정을 불러오는 중 오류가 발생했습니다.\n기본 설정으로 초기화됩니다.\n\n오류: {e}")
+    
+    def load_config_to_ui(self):
+        """설정 데이터를 UI에 로드"""
+        try:
+            # API 설정
+            api_config = self.config_data.get('api', {})
+            self.api_key_var.set(api_config.get('service_key', ''))
+            
+            # 이메일 설정
+            email_config = self.config_data.get('email', {})
+            self.sender_email_var.set(email_config.get('sender_email', ''))
+            self.app_password_var.set(email_config.get('app_password', ''))
+            
+            # 수신자 목록 로드
+            self.recipients_listbox.delete(0, tk.END)
+            recipients = email_config.get('recipients', [])
+            for recipient in recipients:
+                if recipient and recipient.strip():
+                    self.recipients_listbox.insert(tk.END, recipient.strip())
+            
+            # 카카오톡 설정
+            kakao_config = self.config_data.get('kakao', {})
+            self.kakao_enabled_var.set(kakao_config.get('enabled', False))
+            self.kakao_api_key_var.set(kakao_config.get('api_key', ''))
+            self.toggle_kakao_settings()
+            
+            # 스케줄 설정
+            schedule_config = self.config_data.get('schedule', {})
+            self.schedule_enabled_var.set(schedule_config.get('enabled', False))
+            self.schedule_time_var.set(schedule_config.get('time', '09:00'))
+            self.toggle_schedule_settings()
+            
+            self.log_message("✅ 설정 UI 로드 완료")
+            
+        except Exception as e:
+            self.log_message(f"❌ UI 로드 오류: {e}")
+    
+    def save_settings(self):
+        """설정 저장"""
+        try:
+            # 수신자 목록 수집
+            recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
+            
+            # 설정 데이터 구성
+            config_data = {
+                'api': {
+                    'service_key': self.api_key_var.get().strip(),
+                    'max_rows': 50,
+                    'timeout': 30
+                },
+                'email': {
+                    'sender_email': self.sender_email_var.get().strip(),
+                    'app_password': self.app_password_var.get().strip(),
+                    'recipients': recipients,
+                    'smtp_server': 'smtp.gmail.com',
+                    'smtp_port': 587
+                },
+                'kakao': {
+                    'enabled': self.kakao_enabled_var.get(),
+                    'api_key': self.kakao_api_key_var.get().strip(),
+                    'template_id': ''
+                },
+                'schedule': {
+                    'enabled': self.schedule_enabled_var.get(),
+                    'time': self.schedule_time_var.get().strip(),
+                    'frequency': 'daily'
+                },
+                'files': {
+                    'output_dir': 'output',
+                    'filename_format': '청약분양정보_{timestamp}.xlsx'
+                },
+                'logging': {
+                    'level': 'INFO',
+                    'file_enabled': True,
+                    'console_enabled': True
+                }
+            }
+            
+            # 새로운 ConfigManager를 사용하여 설정 저장
+            # 자동으로 백업 생성, 유효성 검증, 암호화가 수행됩니다
+            if self.config_manager.save_config(config_data):
+                messagebox.showinfo("설정 저장", "설정이 성공적으로 저장되었습니다.")
+                self.log_message("✅ 설정 저장 완료")
+                self.config_data = config_data
+            else:
+                messagebox.showerror("설정 저장 실패", "설정 저장 중 오류가 발생했습니다.")
+                
+        except Exception as e:
+            error_msg = f"설정 저장 오류: {str(e)}"
+            messagebox.showerror("오류", error_msg)
+            self.log_message(f"❌ {error_msg}")
+    
+    def create_button_section(self, parent, start_row):
+        """버튼 섹션 생성 (추가 기능 포함)"""
+        # 버튼 프레임
+        button_frame = ttk.Frame(parent)
+        button_frame.grid(row=start_row, column=0, columnspan=3, pady=20)
+        
+        # 실행 버튼
+        self.run_btn = ttk.Button(button_frame, text="🚀 실행", command=self.run_system, 
+                                 style='Accent.TButton', width=12)
+        self.run_btn.grid(row=0, column=0, padx=5)
+        
+        # 설정 저장 버튼
+        ttk.Button(button_frame, text="💾 설정저장", command=self.save_settings, width=12).grid(row=0, column=1, padx=5)
+        
+        # 설정 불러오기 버튼
+        ttk.Button(button_frame, text="📁 설정불러오기", command=self.safe_load_settings, width=12).grid(row=0, column=2, padx=5)
+        
+        # 엑셀 테스트 버튼
+        ttk.Button(button_frame, text="📊 엑셀테스트", command=self.test_excel_creation, width=12).grid(row=0, column=3, padx=5)
+        
+        # 추가 기능 버튼들 (두 번째 줄)
+        ttk.Button(button_frame, text="🔧 설정수정", command=self.fix_config_file, width=12).grid(row=1, column=0, padx=5, pady=5)
+        ttk.Button(button_frame, text="🔄 초기화", command=self.reset_config, width=12).grid(row=1, column=1, padx=5, pady=5)
+        ttk.Button(button_frame, text="📤 내보내기", command=self.export_config, width=12).grid(row=1, column=2, padx=5, pady=5)
+        ttk.Button(button_frame, text="📥 가져오기", command=self.import_config, width=12).grid(row=1, column=3, padx=5, pady=5)
+        
+        # 종료 버튼
+        ttk.Button(button_frame, text="❌ 종료", command=self.on_closing, width=12).grid(row=1, column=4, padx=5, pady=5)
+    
+    def fix_config_file(self):
+        """설정 파일 URL 인코딩 문제 수정"""
+        try:
+            if self.config_manager.fix_url_encoding_issues():
+                messagebox.showinfo("수정 완료", "설정 파일이 성공적으로 수정되었습니다!")
+                self.log_message("✅ 설정 파일 수정 완료")
+                # 설정 다시 로드
+                self.safe_load_settings()
+            else:
+                messagebox.showerror("수정 실패", "설정 파일 수정 중 오류가 발생했습니다.")
+                
+        except Exception as e:
+            error_msg = f"설정 파일 수정 오류: {e}"
+            messagebox.showerror("수정 실패", error_msg)
+            self.log_message(f"❌ {error_msg}")
+    
+    def reset_config(self):
+        """설정 초기화"""
+        if messagebox.askyesno("설정 초기화", "모든 설정을 초기화하시겠습니까?\n(백업이 생성됩니다)"):
+            try:
+                if self.config_manager.reset_config():
+                    messagebox.showinfo("초기화 완료", "설정이 초기화되었습니다.")
+                    self.log_message("✅ 설정 초기화 완료")
+                    # 설정 다시 로드
+                    self.safe_load_settings()
+                else:
+                    messagebox.showerror("초기화 실패", "설정 초기화 중 오류가 발생했습니다.")
+                    
+            except Exception as e:
+                error_msg = f"설정 초기화 오류: {e}"
+                messagebox.showerror("초기화 실패", error_msg)
+                self.log_message(f"❌ {error_msg}")
+    
+    def export_config(self):
+        """설정 내보내기"""
+        try:
+            file_path = filedialog.asksaveasfilename(
+                title="설정 파일 내보내기",
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+            )
+            
+            if file_path:
+                include_sensitive = messagebox.askyesno("민감정보 포함", 
+                                                       "민감정보(비밀번호, API 키)도 함께 내보내시겠습니까?")
+                
+                if self.config_manager.export_config(file_path, include_sensitive):
+                    messagebox.showinfo("내보내기 완료", f"설정이 내보내졌습니다:\n{file_path}")
+                    self.log_message(f"✅ 설정 내보내기 완료: {file_path}")
+                else:
+                    messagebox.showerror("내보내기 실패", "설정 내보내기 중 오류가 발생했습니다.")
+                    
+        except Exception as e:
+            error_msg = f"설정 내보내기 오류: {e}"
+            messagebox.showerror("내보내기 실패", error_msg)
+            self.log_message(f"❌ {error_msg}")
+    
+    def import_config(self):
+        """설정 가져오기"""
+        try:
+            file_path = filedialog.askopenfilename(
+                title="설정 파일 가져오기",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+            )
+            
+            if file_path:
+                if messagebox.askyesno("설정 가져오기", 
+                                     f"현재 설정을 덮어쓰시겠습니까?\n(백업이 생성됩니다)\n\n파일: {file_path}"):
+                    
+                    if self.config_manager.import_config(file_path):
+                        messagebox.showinfo("가져오기 완료", "설정이 가져와졌습니다.")
+                        self.log_message(f"✅ 설정 가져오기 완료: {file_path}")
+                        # 설정 다시 로드
+                        self.safe_load_settings()
+                    else:
+                        messagebox.showerror("가져오기 실패", "설정 가져오기 중 오류가 발생했습니다.")
+                        
+        except Exception as e:
+            error_msg = f"설정 가져오기 오류: {e}"
+            messagebox.showerror("가져오기 실패", error_msg)
+            self.log_message(f"❌ {error_msg}")
+
+# 사용 예제
+if __name__ == "__main__":
+    # ConfigManager 단독 테스트
+    config_manager = ConfigManager()
+    
+    # 설정 정보 확인
+    info = config_manager.get_config_info()
+    print(f"설정 파일: {info['config_file']}")
+    print(f"암호화 사용: {info['encryption_enabled']}")
+    
+    # 설정 로드 (URL 인코딩 문제 자동 해결)
+    config = config_manager.load_config()
+    print(f"로드된 설정: {list(config.keys())}")
+    
+    # URL 인코딩 문제 수정
+    config_manager.fix_url_encoding_issues()

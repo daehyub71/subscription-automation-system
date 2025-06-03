@@ -1,0 +1,519 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+이메일 전송 모듈
+파일명: utils/email_sender.py
+작성자: 청약 자동화 시스템
+설명: Gmail SMTP를 통한 이메일 전송 및 파일 첨부
+"""
+
+import smtplib
+import os
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+from datetime import datetime
+import logging
+from typing import List, Optional, Dict, Tuple
+
+class EmailSender:
+    """Gmail SMTP 이메일 전송 클래스"""
+    
+    def __init__(self, smtp_server: str = "smtp.gmail.com", smtp_port: int = 587):
+        """
+        초기화
+        Args:
+            smtp_server (str): SMTP 서버 주소
+            smtp_port (int): SMTP 포트 번호
+        """
+        self.smtp_server = smtp_server
+        self.smtp_port = smtp_port
+        self.logger = logging.getLogger(__name__)
+    
+    def test_connection(self, sender_email: str, app_password: str) -> Tuple[bool, str]:
+        """
+        SMTP 연결 테스트
+        Args:
+            sender_email (str): 발신자 이메일
+            app_password (str): Gmail 앱 비밀번호
+        Returns:
+            Tuple[bool, str]: (성공여부, 메시지)
+        """
+        try:
+            self.logger.info("SMTP 연결 테스트 시작")
+            
+            # SMTP 서버 연결
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server.starttls()  # TLS 보안 연결
+            
+            # 로그인 테스트
+            server.login(sender_email, app_password)
+            server.quit()
+            
+            self.logger.info("SMTP 연결 테스트 성공")
+            return True, "SMTP 연결 성공"
+            
+        except smtplib.SMTPAuthenticationError as e:
+            error_msg = f"인증 실패: Gmail 주소 또는 앱 비밀번호를 확인하세요. ({e})"
+            self.logger.error(error_msg)
+            return False, error_msg
+            
+        except smtplib.SMTPConnectError as e:
+            error_msg = f"SMTP 서버 연결 실패: 네트워크 연결을 확인하세요. ({e})"
+            self.logger.error(error_msg)
+            return False, error_msg
+            
+        except Exception as e:
+            error_msg = f"예상치 못한 오류: {str(e)}"
+            self.logger.error(error_msg)
+            return False, error_msg
+    
+    def send_subscription_email(self, 
+                               sender_email: str, 
+                               app_password: str,
+                               recipients: List[str], 
+                               excel_file_path: str,
+                               data_summary: Dict) -> Tuple[bool, str]:
+        """
+        청약 분양정보 이메일 전송
+        Args:
+            sender_email (str): 발신자 이메일
+            app_password (str): Gmail 앱 비밀번호  
+            recipients (List[str]): 수신자 이메일 목록
+            excel_file_path (str): 첨부할 엑셀 파일 경로
+            data_summary (Dict): 데이터 요약 정보
+        Returns:
+            Tuple[bool, str]: (성공여부, 메시지)
+        """
+        try:
+            self.logger.info(f"이메일 전송 시작: {len(recipients)}명의 수신자")
+            
+            # 이메일 메시지 생성
+            msg = self._create_email_message(
+                sender_email, 
+                recipients, 
+                excel_file_path, 
+                data_summary
+            )
+            
+            # SMTP 서버 연결 및 전송
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server.starttls()
+            server.login(sender_email, app_password)
+            
+            # 이메일 전송
+            text = msg.as_string()
+            server.sendmail(sender_email, recipients, text)
+            server.quit()
+            
+            success_msg = f"이메일 전송 성공: {len(recipients)}명"
+            self.logger.info(success_msg)
+            return True, success_msg
+            
+        except Exception as e:
+            error_msg = f"이메일 전송 실패: {str(e)}"
+            self.logger.error(error_msg)
+            return False, error_msg
+    
+    def _create_email_message(self, 
+                             sender_email: str, 
+                             recipients: List[str], 
+                             excel_file_path: str,
+                             data_summary: Dict) -> MIMEMultipart:
+        """
+        이메일 메시지 생성
+        Args:
+            sender_email (str): 발신자 이메일
+            recipients (List[str]): 수신자 목록
+            excel_file_path (str): 엑셀 파일 경로
+            data_summary (Dict): 데이터 요약 정보
+        Returns:
+            MIMEMultipart: 이메일 메시지 객체
+        """
+        # 메시지 객체 생성
+        msg = MIMEMultipart('alternative')
+        
+        # 이메일 헤더 설정
+        msg['From'] = sender_email
+        msg['To'] = ', '.join(recipients)
+        msg['Subject'] = f"🏠 청약 분양정보 업데이트 - {datetime.now().strftime('%Y년 %m월 %d일')}"
+        
+        # 이메일 본문 생성
+        html_body = self._create_html_body(data_summary, excel_file_path)
+        text_body = self._create_text_body(data_summary)
+        
+        # 본문 첨부
+        part1 = MIMEText(text_body, 'plain', 'utf-8')
+        part2 = MIMEText(html_body, 'html', 'utf-8')
+        
+        msg.attach(part1)
+        msg.attach(part2)
+        
+        # 엑셀 파일 첨부
+        if excel_file_path and os.path.exists(excel_file_path):
+            self._attach_file(msg, excel_file_path)
+        
+        return msg
+    
+    def _create_html_body(self, data_summary: Dict, excel_file_path: str) -> str:
+        """
+        HTML 이메일 본문 생성
+        Args:
+            data_summary (Dict): 데이터 요약 정보
+            excel_file_path (str): 엑셀 파일 경로
+        Returns:
+            str: HTML 본문
+        """
+        # 통계 계산
+        total_count = sum(len(data_list) for data_list in data_summary.values() if isinstance(data_list, list))
+        general_count = len(data_summary.get('general', []))
+        apt_count = len(data_summary.get('apt', []))
+        officetel_count = len(data_summary.get('officetel', []))
+        
+        # 파일명 추출
+        filename = os.path.basename(excel_file_path) if excel_file_path else "분양정보.xlsx"
+        
+        # 최신 분양정보 (상위 5개)
+        recent_items = []
+        all_items = []
+        
+        for category, items in data_summary.items():
+            if isinstance(items, list):
+                for item in items:
+                    item_with_category = item.copy()
+                    item_with_category['분양유형'] = {
+                        'general': '일반분양',
+                        'apt': 'APT분양',
+                        'officetel': '오피스텔분양'
+                    }.get(category, category)
+                    all_items.append(item_with_category)
+        
+        # 최신순 정렬
+        try:
+            all_items.sort(key=lambda x: x.get('모집공고일', ''), reverse=True)
+            recent_items = all_items[:5]
+        except:
+            recent_items = all_items[:5]
+        
+        # 최신 분양정보 HTML 생성
+        recent_items_html = ""
+        for i, item in enumerate(recent_items, 1):
+            recent_items_html += f"""
+            <tr style="background-color: {'#f9f9f9' if i % 2 == 0 else '#ffffff'};">
+                <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">{i}</td>
+                <td style="padding: 8px; border: 1px solid #ddd;">{item.get('분양유형', '')}</td>
+                <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">{item.get('주택명', '')}</td>
+                <td style="padding: 8px; border: 1px solid #ddd;">{item.get('공급지역', '')}</td>
+                <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">{item.get('모집공고일', '')}</td>
+            </tr>
+            """
+        
+        html_body = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{ 
+                    font-family: '맑은 고딕', Arial, sans-serif; 
+                    line-height: 1.6;
+                    color: #333;
+                    margin: 0;
+                    padding: 20px;
+                }}
+                .container {{
+                    max-width: 800px;
+                    margin: 0 auto;
+                    background-color: #ffffff;
+                    border-radius: 10px;
+                    overflow: hidden;
+                    box-shadow: 0 0 20px rgba(0,0,0,0.1);
+                }}
+                .header {{ 
+                    background: linear-gradient(135deg, #4F81BD 0%, #6BA3E0 100%);
+                    color: white; 
+                    padding: 30px;
+                    text-align: center;
+                }}
+                .header h1 {{
+                    margin: 0;
+                    font-size: 24px;
+                    font-weight: bold;
+                }}
+                .content {{ 
+                    padding: 30px;
+                }}
+                .summary {{ 
+                    background-color: #f8f9fa; 
+                    padding: 20px; 
+                    margin: 20px 0;
+                    border-radius: 8px;
+                    border-left: 4px solid #4F81BD;
+                }}
+                .summary h3 {{
+                    margin-top: 0;
+                    color: #4F81BD;
+                    font-size: 18px;
+                }}
+                .stats {{
+                    display: flex;
+                    justify-content: space-around;
+                    margin: 20px 0;
+                    flex-wrap: wrap;
+                }}
+                .stat-item {{
+                    text-align: center;
+                    padding: 15px;
+                    background-color: white;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    margin: 5px;
+                    min-width: 120px;
+                }}
+                .stat-number {{
+                    font-size: 24px;
+                    font-weight: bold;
+                    color: #4F81BD;
+                }}
+                .stat-label {{
+                    font-size: 12px;
+                    color: #666;
+                    margin-top: 5px;
+                }}
+                .recent-table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin: 20px 0;
+                    background-color: white;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }}
+                .recent-table th {{
+                    background-color: #4F81BD;
+                    color: white;
+                    padding: 12px 8px;
+                    text-align: center;
+                    font-weight: bold;
+                }}
+                .recent-table td {{
+                    padding: 8px;
+                    border: 1px solid #ddd;
+                }}
+                .footer {{
+                    background-color: #f8f9fa;
+                    padding: 20px;
+                    text-align: center;
+                    color: #666;
+                    border-top: 1px solid #eee;
+                }}
+                .attachment {{
+                    background-color: #e8f4f8;
+                    padding: 15px;
+                    border-radius: 8px;
+                    margin: 20px 0;
+                    border: 1px solid #4F81BD;
+                }}
+                .attachment-icon {{
+                    color: #4F81BD;
+                    font-size: 18px;
+                    margin-right: 10px;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🏠 청약 분양정보 업데이트</h1>
+                    <p style="margin: 10px 0 0 0; opacity: 0.9;">
+                        {datetime.now().strftime('%Y년 %m월 %d일 %H시 %M분')} 기준
+                    </p>
+                </div>
+                
+                <div class="content">
+                    <p>안녕하세요! 최신 청약 분양정보를 전달드립니다.</p>
+                    
+                    <div class="summary">
+                        <h3>📊 분양정보 요약</h3>
+                        <div class="stats">
+                            <div class="stat-item">
+                                <div class="stat-number">{total_count}</div>
+                                <div class="stat-label">총 분양건수</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-number">{general_count}</div>
+                                <div class="stat-label">일반분양</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-number">{apt_count}</div>
+                                <div class="stat-label">APT분양</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-number">{officetel_count}</div>
+                                <div class="stat-label">오피스텔분양</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {f'''
+                    <h3 style="color: #4F81BD; margin-top: 30px;">🏠 최신 분양정보 (상위 5개)</h3>
+                    <table class="recent-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 60px;">순번</th>
+                                <th style="width: 100px;">분양유형</th>
+                                <th style="width: 200px;">주택명</th>
+                                <th style="width: 150px;">공급지역</th>
+                                <th style="width: 100px;">모집공고일</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {recent_items_html}
+                        </tbody>
+                    </table>
+                    ''' if recent_items else '<p style="color: #666; text-align: center; padding: 20px;">표시할 분양정보가 없습니다.</p>'}
+                    
+                    <div class="attachment">
+                        <span class="attachment-icon">📎</span>
+                        <strong>첨부파일:</strong> {filename}
+                        <br>
+                        <small style="color: #666;">자세한 분양정보는 첨부된 엑셀 파일을 확인해주세요.</small>
+                    </div>
+                    
+                    <p style="margin-top: 30px;">
+                        궁금한 사항이 있으시면 언제든지 연락주세요.<br>
+                        감사합니다.
+                    </p>
+                </div>
+                
+                <div class="footer">
+                    <p>
+                        <strong>청약 분양정보 자동화 시스템</strong><br>
+                        이 이메일은 자동으로 생성되었습니다.
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return html_body
+    
+    def _create_text_body(self, data_summary: Dict) -> str:
+        """
+        텍스트 이메일 본문 생성 (HTML을 지원하지 않는 이메일 클라이언트용)
+        Args:
+            data_summary (Dict): 데이터 요약 정보
+        Returns:
+            str: 텍스트 본문
+        """
+        total_count = sum(len(data_list) for data_list in data_summary.values() if isinstance(data_list, list))
+        general_count = len(data_summary.get('general', []))
+        apt_count = len(data_summary.get('apt', []))
+        officetel_count = len(data_summary.get('officetel', []))
+        
+        text_body = f"""
+청약 분양정보 업데이트
+{datetime.now().strftime('%Y년 %m월 %d일 %H시 %M분')} 기준
+
+안녕하세요! 최신 청약 분양정보를 전달드립니다.
+
+📊 분양정보 요약
+- 총 분양건수: {total_count}건
+- 일반분양: {general_count}건  
+- APT분양: {apt_count}건
+- 오피스텔분양: {officetel_count}건
+
+자세한 정보는 첨부된 엑셀 파일을 확인해주세요.
+
+감사합니다.
+
+---
+청약 분양정보 자동화 시스템
+이 이메일은 자동으로 생성되었습니다.
+        """
+        
+        return text_body.strip()
+    
+    def _attach_file(self, msg: MIMEMultipart, file_path: str):
+        """
+        파일 첨부
+        Args:
+            msg (MIMEMultipart): 이메일 메시지 객체
+            file_path (str): 첨부할 파일 경로
+        """
+        try:
+            if not os.path.exists(file_path):
+                self.logger.warning(f"첨부파일이 존재하지 않음: {file_path}")
+                return
+            
+            # 파일 읽기
+            with open(file_path, "rb") as attachment:
+                # MIMEBase 객체 생성
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(attachment.read())
+            
+            # 인코딩
+            encoders.encode_base64(part)
+            
+            # 헤더 추가
+            filename = os.path.basename(file_path)
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename= {filename}',
+            )
+            
+            # 메시지에 첨부
+            msg.attach(part)
+            
+            self.logger.info(f"파일 첨부 완료: {filename}")
+            
+        except Exception as e:
+            self.logger.error(f"파일 첨부 오류: {e}")
+    
+    def send_test_email(self, sender_email: str, app_password: str, test_recipient: str) -> Tuple[bool, str]:
+        """
+        테스트 이메일 전송
+        Args:
+            sender_email (str): 발신자 이메일
+            app_password (str): Gmail 앱 비밀번호
+            test_recipient (str): 테스트 수신자
+        Returns:
+            Tuple[bool, str]: (성공여부, 메시지)
+        """
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = sender_email
+            msg['To'] = test_recipient
+            msg['Subject'] = "🧪 청약 시스템 이메일 테스트"
+            
+            body = f"""
+이메일 설정 테스트
+
+발신자: {sender_email}
+수신자: {test_recipient}
+테스트 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+이 이메일을 받으셨다면 이메일 설정이 정상적으로 완료된 것입니다! 🎉
+
+청약 분양정보 자동화 시스템
+            """
+            
+            msg.attach(MIMEText(body, 'plain', 'utf-8'))
+            
+            # SMTP 전송
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server.starttls()
+            server.login(sender_email, app_password)
+            server.sendmail(sender_email, test_recipient, msg.as_string())
+            server.quit()
+            
+            success_msg = f"테스트 이메일 전송 성공: {test_recipient}"
+            self.logger.info(success_msg)
+            return True, success_msg
+            
+        except Exception as e:
+            error_msg = f"테스트 이메일 전송 실패: {str(e)}"
+            self.logger.error(error_msg)
+            return False, error_msg

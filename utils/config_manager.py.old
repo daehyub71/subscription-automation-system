@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+설정 관리 모듈
+파일명: utils/config_manager.py
+작성자: 청약 자동화 시스템
+설명: 애플리케이션 설정 저장/불러오기 및 암호화 관리
+"""
+
+import os
+import configparser
+import base64
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+class ConfigManager:
+    """설정 파일 관리 클래스"""
+    
+    def __init__(self, config_dir="config"):
+        """
+        초기화
+        Args:
+            config_dir (str): 설정 파일 디렉토리
+        """
+        self.config_dir = config_dir
+        self.config_file = os.path.join(config_dir, "settings.ini")
+        self.key_file = os.path.join(config_dir, "secret.key")
+        
+        # 설정 디렉토리 생성
+        if not os.path.exists(config_dir):
+            os.makedirs(config_dir)
+        
+        self.config = configparser.ConfigParser()
+        self._setup_default_config()
+        self._load_or_create_key()
+    
+    def _setup_default_config(self):
+        """기본 설정값 설정"""
+        # API 설정
+        self.config.add_section('API')
+        self.config.set('API', 'service_key', '')
+        self.config.set('API', 'max_rows', '50')
+        self.config.set('API', 'timeout', '30')
+        
+        # 이메일 설정
+        self.config.add_section('EMAIL')
+        self.config.set('EMAIL', 'sender_email', '')
+        self.config.set('EMAIL', 'app_password', '')  # 암호화됨
+        self.config.set('EMAIL', 'recipients', '')  # 세미콜론으로 구분
+        self.config.set('EMAIL', 'smtp_server', 'smtp.gmail.com')
+        self.config.set('EMAIL', 'smtp_port', '587')
+        
+        # 카카오톡 설정
+        self.config.add_section('KAKAO')
+        self.config.set('KAKAO', 'enabled', 'False')
+        self.config.set('KAKAO', 'api_key', '')  # 암호화됨
+        self.config.set('KAKAO', 'template_id', '')
+        
+        # 스케줄 설정
+        self.config.add_section('SCHEDULE')
+        self.config.set('SCHEDULE', 'enabled', 'False')
+        self.config.set('SCHEDULE', 'time', '09:00')
+        self.config.set('SCHEDULE', 'frequency', 'daily')
+        
+        # 파일 설정
+        self.config.add_section('FILES')
+        self.config.set('FILES', 'output_dir', 'output')
+        self.config.set('FILES', 'filename_format', '청약분양정보_{timestamp}.xlsx')
+        
+        # 로그 설정
+        self.config.add_section('LOGGING')
+        self.config.set('LOGGING', 'level', 'INFO')
+        self.config.set('LOGGING', 'file_enabled', 'True')
+        self.config.set('LOGGING', 'console_enabled', 'True')
+    
+    def _load_or_create_key(self):
+        """암호화 키 로드 또는 생성"""
+        if os.path.exists(self.key_file):
+            with open(self.key_file, 'rb') as f:
+                self.key = f.read()
+        else:
+            # 새로운 키 생성
+            password = b"subscription_automation_2024"  # 기본 패스워드
+            salt = os.urandom(16)
+            
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt,
+                iterations=100000,
+            )
+            key = base64.urlsafe_b64encode(kdf.derive(password))
+            
+            # 키 파일에 저장 (salt + key)
+            with open(self.key_file, 'wb') as f:
+                f.write(salt + key)
+            
+            self.key = key
+    
+    def _encrypt_value(self, value):
+        """값 암호화"""
+        if not value:
+            return ""
+        
+        try:
+            f = Fernet(self.key)
+            encrypted = f.encrypt(value.encode())
+            return base64.urlsafe_b64encode(encrypted).decode()
+        except Exception as e:
+            print(f"암호화 오류: {e}")
+            return value
+    
+    def _decrypt_value(self, encrypted_value):
+        """값 복호화"""
+        if not encrypted_value:
+            return ""
+        
+        try:
+            f = Fernet(self.key)
+            decoded = base64.urlsafe_b64decode(encrypted_value.encode())
+            decrypted = f.decrypt(decoded)
+            return decrypted.decode()
+        except Exception as e:
+            print(f"복호화 오류: {e}")
+            return encrypted_value
+    
+    def save_config(self, config_data):
+        """
+        설정 저장
+        Args:
+            config_data (dict): 저장할 설정 데이터
+        """
+        try:
+            # API 설정
+            if 'api' in config_data:
+                api_config = config_data['api']
+                self.config.set('API', 'service_key', api_config.get('service_key', ''))
+                self.config.set('API', 'max_rows', str(api_config.get('max_rows', 50)))
+            
+            # 이메일 설정 (민감정보 암호화)
+            if 'email' in config_data:
+                email_config = config_data['email']
+                self.config.set('EMAIL', 'sender_email', email_config.get('sender_email', ''))
+                
+                # 앱 비밀번호 암호화
+                app_password = email_config.get('app_password', '')
+                if app_password:
+                    encrypted_password = self._encrypt_value(app_password)
+                    self.config.set('EMAIL', 'app_password', encrypted_password)
+                
+                # 수신자 목록
+                recipients = email_config.get('recipients', [])
+                if isinstance(recipients, list):
+                    recipients_str = ';'.join(recipients)
+                else:
+                    recipients_str = recipients
+                self.config.set('EMAIL', 'recipients', recipients_str)
+            
+            # 카카오톡 설정
+            if 'kakao' in config_data:
+                kakao_config = config_data['kakao']
+                self.config.set('KAKAO', 'enabled', str(kakao_config.get('enabled', False)))
+                
+                # API 키 암호화
+                api_key = kakao_config.get('api_key', '')
+                if api_key:
+                    encrypted_key = self._encrypt_value(api_key)
+                    self.config.set('KAKAO', 'api_key', encrypted_key)
+            
+            # 스케줄 설정
+            if 'schedule' in config_data:
+                schedule_config = config_data['schedule']
+                self.config.set('SCHEDULE', 'enabled', str(schedule_config.get('enabled', False)))
+                self.config.set('SCHEDULE', 'time', schedule_config.get('time', '09:00'))
+                self.config.set('SCHEDULE', 'frequency', schedule_config.get('frequency', 'daily'))
+            
+            # 설정 파일에 저장
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                self.config.write(f)
+            
+            return True
+            
+        except Exception as e:
+            print(f"설정 저장 오류: {e}")
+            return False
+    
+    def load_config(self):
+        """
+        설정 불러오기
+        Returns:
+            dict: 설정 데이터
+        """
+        try:
+            if os.path.exists(self.config_file):
+                self.config.read(self.config_file, encoding='utf-8')
+            
+            # 설정 데이터 구성
+            config_data = {
+                'api': {
+                    'service_key': self.config.get('API', 'service_key', fallback=''),
+                    'max_rows': self.config.getint('API', 'max_rows', fallback=50),
+                    'timeout': self.config.getint('API', 'timeout', fallback=30)
+                },
+                'email': {
+                    'sender_email': self.config.get('EMAIL', 'sender_email', fallback=''),
+                    'app_password': self._decrypt_value(self.config.get('EMAIL', 'app_password', fallback='')),
+                    'recipients': self.config.get('EMAIL', 'recipients', fallback='').split(';') if self.config.get('EMAIL', 'recipients', fallback='') else [],
+                    'smtp_server': self.config.get('EMAIL', 'smtp_server', fallback='smtp.gmail.com'),
+                    'smtp_port': self.config.getint('EMAIL', 'smtp_port', fallback=587)
+                },
+                'kakao': {
+                    'enabled': self.config.getboolean('KAKAO', 'enabled', fallback=False),
+                    'api_key': self._decrypt_value(self.config.get('KAKAO', 'api_key', fallback='')),
+                    'template_id': self.config.get('KAKAO', 'template_id', fallback='')
+                },
+                'schedule': {
+                    'enabled': self.config.getboolean('SCHEDULE', 'enabled', fallback=False),
+                    'time': self.config.get('SCHEDULE', 'time', fallback='09:00'),
+                    'frequency': self.config.get('SCHEDULE', 'frequency', fallback='daily')
+                },
+                'files': {
+                    'output_dir': self.config.get('FILES', 'output_dir', fallback='output'),
+                    'filename_format': self.config.get('FILES', 'filename_format', fallback='청약분양정보_{timestamp}.xlsx')
+                },
+                'logging': {
+                    'level': self.config.get('LOGGING', 'level', fallback='INFO'),
+                    'file_enabled': self.config.getboolean('LOGGING', 'file_enabled', fallback=True),
+                    'console_enabled': self.config.getboolean('LOGGING', 'console_enabled', fallback=True)
+                }
+            }
+            
+            return config_data
+            
+        except Exception as e:
+            print(f"설정 불러오기 오류: {e}")
+            return self._get_default_config()
+    
+    def _get_default_config(self):
+        """기본 설정 반환"""
+        return {
+            'api': {'service_key': '', 'max_rows': 50, 'timeout': 30},
+            'email': {'sender_email': '', 'app_password': '', 'recipients': [], 'smtp_server': 'smtp.gmail.com', 'smtp_port': 587},
+            'kakao': {'enabled': False, 'api_key': '', 'template_id': ''},
+            'schedule': {'enabled': False, 'time': '09:00', 'frequency': 'daily'},
+            'files': {'output_dir': 'output', 'filename_format': '청약분양정보_{timestamp}.xlsx'},
+            'logging': {'level': 'INFO', 'file_enabled': True, 'console_enabled': True}
+        }
+    
+    def validate_config(self, config_data):
+        """
+        설정 유효성 검증
+        Args:
+            config_data (dict): 검증할 설정 데이터
+        Returns:
+            tuple: (is_valid, error_messages)
+        """
+        errors = []
+        
+        # API 키 검증
+        if not config_data.get('api', {}).get('service_key'):
+            errors.append("공공데이터포털 인증키가 필요합니다.")
+        
+        # 이메일 설정 검증
+        email_config = config_data.get('email', {})
+        if not email_config.get('sender_email'):
+            errors.append("발신자 이메일 주소가 필요합니다.")
+        
+        if not email_config.get('app_password'):
+            errors.append("Gmail 앱 비밀번호가 필요합니다.")
+        
+        if not email_config.get('recipients'):
+            errors.append("수신자 이메일 주소가 필요합니다.")
+        
+        # 이메일 형식 검증
+        import re
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        
+        sender_email = email_config.get('sender_email', '')
+        if sender_email and not re.match(email_pattern, sender_email):
+            errors.append("발신자 이메일 형식이 올바르지 않습니다.")
+        
+        recipients = email_config.get('recipients', [])
+        for recipient in recipients:
+            if recipient and not re.match(email_pattern, recipient):
+                errors.append(f"수신자 이메일 형식이 올바르지 않습니다: {recipient}")
+        
+        return len(errors) == 0, errors

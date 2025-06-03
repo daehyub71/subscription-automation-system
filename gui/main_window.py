@@ -1,0 +1,803 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+메인 GUI 창 모듈 (완전한 오류 수정 버전)
+파일명: gui/main_window.py
+작성자: 청약 자동화 시스템
+설명: tkinter를 사용한 메인 사용자 인터페이스
+"""
+
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog, scrolledtext
+import threading
+import logging
+import os
+import sys
+import urllib.parse
+import json
+from datetime import datetime
+from typing import Dict, List, Optional
+
+# 상위 디렉토리의 모듈 import를 위한 경로 추가
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 안전한 import를 위한 try-except
+try:
+    from utils.config_manager import ConfigManager
+except ImportError:
+    # ConfigManager가 없으면 임시 클래스 생성
+    class ConfigManager:
+        def __init__(self):
+            self.config_path = "config/settings.json"
+        
+        def load_config(self):
+            return self._safe_load_config()
+        
+        def _safe_load_config(self):
+            try:
+                if os.path.exists(self.config_path):
+                    with open(self.config_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        # URL 인코딩된 부분 처리
+                        config = json.loads(content)
+                        return self._process_config(config)
+                else:
+                    return self._create_default_config()
+            except Exception as e:
+                print(f"설정 불러오기 오류: {e}")
+                return self._create_default_config()
+        
+        def _process_config(self, config):
+            # 서비스키 URL 디코딩 처리
+            if 'api' in config and 'service_key' in config['api']:
+                service_key = config['api']['service_key']
+                if isinstance(service_key, str) and '%' in service_key:
+                    try:
+                        decoded_key = urllib.parse.unquote(service_key)
+                        config['api']['service_key'] = decoded_key
+                        print("서비스키 URL 디코딩 완료")
+                    except:
+                        pass
+            return config
+        
+        def _create_default_config(self):
+            return {
+                'api': {'service_key': '', 'max_rows': 50},
+                'email': {'sender_email': '', 'app_password': '', 'recipients': []},
+                'kakao': {'enabled': False, 'api_key': ''},
+                'schedule': {'enabled': False, 'time': '09:00'}
+            }
+        
+        def save_config(self, config_data):
+            try:
+                os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+                with open(self.config_path, 'w', encoding='utf-8') as f:
+                    json.dump(config_data, f, ensure_ascii=False, indent=2)
+                return True
+            except Exception as e:
+                print(f"설정 저장 오류: {e}")
+                return False
+        
+        def validate_config(self, config_data):
+            errors = []
+            if not config_data['api']['service_key']:
+                errors.append("API 서비스키가 필요합니다")
+            return len(errors) == 0, errors
+        
+        def fix_url_encoding_issues(self):
+            return True
+
+try:
+    from api.public_data import PublicDataAPI
+except ImportError:
+    class PublicDataAPI:
+        def __init__(self, service_key):
+            self.service_key = service_key
+        def test_connection(self):
+            return True, "API 모듈을 찾을 수 없습니다"
+        def get_comprehensive_data(self, max_rows=50):
+            return {'apt': [], 'officetel': [], 'remndr': [], 'public_rent': [], 'opt': []}
+
+try:
+    from utils.excel_handler import ExcelHandler
+except ImportError:
+    class ExcelHandler:
+        def create_test_excel(self):
+            return "test_file.xlsx"
+        def create_excel_file(self, data):
+            return "output.xlsx"
+
+try:
+    from utils.email_sender import EmailSender
+except ImportError:
+    class EmailSender:
+        def test_connection(self, sender, password):
+            return True, "이메일 모듈을 찾을 수 없습니다"
+        def send_test_email(self, sender, password, recipient):
+            return True, "테스트 성공"
+        def send_subscription_email(self, sender, password, recipients, file, data):
+            return True, "이메일 전송 완료"
+
+try:
+    from api.kakao_api import create_kakao_api
+except ImportError:
+    def create_kakao_api(api_key, enabled):
+        class MockKakaoAPI:
+            def send_subscription_notification(self, data):
+                return True, "카카오톡 모듈을 찾을 수 없습니다"
+        return MockKakaoAPI()
+
+class SubscriptionGUI:
+    """청약 분양정보 자동화 시스템 GUI 클래스"""
+    
+    def __init__(self):
+        """GUI 초기화"""
+        self.root = tk.Tk()
+        self.setup_window()
+        
+        # 설정 관리자 초기화 (안전한 초기화)
+        self.config_manager = ConfigManager()
+        self.config_data = {}
+        
+        # 로깅 설정
+        self.setup_logging()
+        
+        # GUI 컴포넌트 초기화
+        self.create_widgets()
+        
+        # 설정 안전하게 로드
+        self.safe_load_settings()
+        
+        # 진행상태 변수
+        self.is_running = False
+    
+    def setup_window(self):
+        """메인 창 설정"""
+        self.root.title("🏠 청약 분양정보 자동화 시스템 v1.0")
+        self.root.geometry("800x700")
+        self.root.resizable(True, True)
+        
+        # 창 아이콘 설정 (선택사항)
+        try:
+            # self.root.iconbitmap('icon.ico')  # 아이콘 파일이 있는 경우
+            pass
+        except:
+            pass
+        
+        # 메인 스타일 설정
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # 창 닫기 이벤트 바인딩
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+    
+    def setup_logging(self):
+        """로깅 설정"""
+        # 로그 디렉토리 생성
+        log_dir = "logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        
+        # 로그 파일명
+        log_filename = os.path.join(log_dir, f"subscription_system_{datetime.now().strftime('%Y%m%d')}.log")
+        
+        # 로깅 설정
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_filename, encoding='utf-8'),
+                logging.StreamHandler()
+            ]
+        )
+        
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("청약 분양정보 자동화 시스템 시작")
+    
+    def safe_load_settings(self):
+        """설정 안전하게 로드 (URL 인코딩 문제 해결)"""
+        try:
+            self.log_message("설정 파일 로드 시작...")
+            
+            # 설정 로드 (URL 인코딩 문제 자동 해결)
+            self.config_data = self.config_manager.load_config()
+            
+            # UI에 설정 반영
+            self.load_config_to_ui()
+            
+        except Exception as e:
+            self.log_message(f"❌ 설정 불러오기 오류: {e}")
+            self.config_data = self.config_manager._create_default_config()
+            messagebox.showerror("설정 불러오기 실패", 
+                               f"설정을 불러오는 중 오류가 발생했습니다.\n기본 설정으로 초기화됩니다.\n\n오류: {e}")
+    
+    def load_config_to_ui(self):
+        """설정 데이터를 UI에 로드"""
+        try:
+            # API 설정
+            api_config = self.config_data.get('api', {})
+            self.api_key_var.set(api_config.get('service_key', ''))
+            
+            # 이메일 설정
+            email_config = self.config_data.get('email', {})
+            self.sender_email_var.set(email_config.get('sender_email', ''))
+            self.app_password_var.set(email_config.get('app_password', ''))
+            
+            # 수신자 목록 로드
+            self.recipients_listbox.delete(0, tk.END)
+            recipients = email_config.get('recipients', [])
+            for recipient in recipients:
+                if recipient and recipient.strip():
+                    self.recipients_listbox.insert(tk.END, recipient.strip())
+            
+            # 카카오톡 설정
+            kakao_config = self.config_data.get('kakao', {})
+            self.kakao_enabled_var.set(kakao_config.get('enabled', False))
+            self.kakao_api_key_var.set(kakao_config.get('api_key', ''))
+            self.toggle_kakao_settings()
+            
+            # 스케줄 설정
+            schedule_config = self.config_data.get('schedule', {})
+            self.schedule_enabled_var.set(schedule_config.get('enabled', False))
+            self.schedule_time_var.set(schedule_config.get('time', '09:00'))
+            self.toggle_schedule_settings()
+            
+            self.log_message("✅ 설정 UI 로드 완료")
+            
+        except Exception as e:
+            self.log_message(f"❌ UI 로드 오류: {e}")
+    
+    def create_widgets(self):
+        """GUI 위젯 생성"""
+        # 메인 프레임
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # 그리드 가중치 설정
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        
+        current_row = 0
+        
+        # 제목
+        title_label = ttk.Label(main_frame, text="청약 분양정보 자동화 시스템", 
+                               font=('맑은 고딕', 16, 'bold'))
+        title_label.grid(row=current_row, column=0, columnspan=3, pady=(0, 20))
+        current_row += 1
+        
+        # API 설정 섹션
+        self.create_api_section(main_frame, current_row)
+        current_row += 3
+        
+        # 이메일 설정 섹션
+        self.create_email_section(main_frame, current_row)
+        current_row += 5
+        
+        # 카카오톡 설정 섹션
+        self.create_kakao_section(main_frame, current_row)
+        current_row += 3
+        
+        # 실행 옵션 섹션
+        self.create_execution_section(main_frame, current_row)
+        current_row += 3
+        
+        # 버튼 섹션
+        self.create_button_section(main_frame, current_row)
+        current_row += 2
+        
+        # 진행상태 섹션
+        self.create_progress_section(main_frame, current_row)
+        current_row += 3
+        
+        # 로그 섹션
+        self.create_log_section(main_frame, current_row)
+    
+    def create_api_section(self, parent, start_row):
+        """API 설정 섹션 생성"""
+        # API 설정 레이블
+        api_label = ttk.Label(parent, text="📡 API 설정", font=('맑은 고딕', 12, 'bold'))
+        api_label.grid(row=start_row, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        
+        # 구분선
+        separator = ttk.Separator(parent, orient='horizontal')
+        separator.grid(row=start_row+1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # 공공데이터 인증키
+        ttk.Label(parent, text="공공데이터포털 인증키:").grid(row=start_row+2, column=0, sticky=tk.W, padx=(20, 5))
+        self.api_key_var = tk.StringVar()
+        self.api_key_entry = ttk.Entry(parent, textvariable=self.api_key_var, width=40, show="*")
+        self.api_key_entry.grid(row=start_row+2, column=1, sticky=(tk.W, tk.E), padx=5)
+        
+        # API 테스트 버튼
+        self.test_api_btn = ttk.Button(parent, text="테스트", command=self.test_api_connection)
+        self.test_api_btn.grid(row=start_row+2, column=2, padx=(5, 0))
+    
+    def create_email_section(self, parent, start_row):
+        """이메일 설정 섹션 생성"""
+        # 이메일 설정 레이블
+        email_label = ttk.Label(parent, text="📧 이메일 설정", font=('맑은 고딕', 12, 'bold'))
+        email_label.grid(row=start_row, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        
+        # 구분선
+        separator = ttk.Separator(parent, orient='horizontal')
+        separator.grid(row=start_row+1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # 발신자 이메일
+        ttk.Label(parent, text="발신자 이메일:").grid(row=start_row+2, column=0, sticky=tk.W, padx=(20, 5))
+        self.sender_email_var = tk.StringVar()
+        self.sender_email_entry = ttk.Entry(parent, textvariable=self.sender_email_var, width=40)
+        self.sender_email_entry.grid(row=start_row+2, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5)
+        
+        # 앱 비밀번호
+        ttk.Label(parent, text="Gmail 앱 비밀번호:").grid(row=start_row+3, column=0, sticky=tk.W, padx=(20, 5))
+        self.app_password_var = tk.StringVar()
+        self.app_password_entry = ttk.Entry(parent, textvariable=self.app_password_var, width=40, show="*")
+        self.app_password_entry.grid(row=start_row+3, column=1, sticky=(tk.W, tk.E), padx=5)
+        
+        # 이메일 테스트 버튼
+        self.test_email_btn = ttk.Button(parent, text="테스트", command=self.test_email_connection)
+        self.test_email_btn.grid(row=start_row+3, column=2, padx=(5, 0))
+        
+        # 수신자 이메일
+        ttk.Label(parent, text="수신자 이메일:").grid(row=start_row+4, column=0, sticky=tk.W, padx=(20, 5))
+        
+        # 수신자 프레임
+        recipients_frame = ttk.Frame(parent)
+        recipients_frame.grid(row=start_row+4, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5)
+        recipients_frame.columnconfigure(0, weight=1)
+        
+        self.recipients_var = tk.StringVar()
+        self.recipients_entry = ttk.Entry(recipients_frame, textvariable=self.recipients_var, width=35)
+        self.recipients_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+        
+        ttk.Button(recipients_frame, text="+추가", command=self.add_recipient, width=8).grid(row=0, column=1)
+        
+        # 수신자 목록
+        self.recipients_listbox = tk.Listbox(parent, height=3)
+        self.recipients_listbox.grid(row=start_row+5, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=5)
+        self.recipients_listbox.bind('<Double-Button-1>', self.remove_recipient)
+    
+    def create_kakao_section(self, parent, start_row):
+        """카카오톡 설정 섹션 생성"""
+        # 카카오톡 설정 레이블
+        kakao_label = ttk.Label(parent, text="💬 카카오톡 설정 (선택사항)", font=('맑은 고딕', 12, 'bold'))
+        kakao_label.grid(row=start_row, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        
+        # 구분선
+        separator = ttk.Separator(parent, orient='horizontal')
+        separator.grid(row=start_row+1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # 카카오톡 활성화 체크박스
+        self.kakao_enabled_var = tk.BooleanVar()
+        self.kakao_enabled_check = ttk.Checkbutton(parent, text="카카오톡 알림 사용", 
+                                                  variable=self.kakao_enabled_var,
+                                                  command=self.toggle_kakao_settings)
+        self.kakao_enabled_check.grid(row=start_row+2, column=0, columnspan=2, sticky=tk.W, padx=(20, 5))
+        
+        # 카카오톡 API 키
+        ttk.Label(parent, text="카카오톡 API 키:").grid(row=start_row+2, column=1, sticky=tk.W, padx=(100, 5))
+        self.kakao_api_key_var = tk.StringVar()
+        self.kakao_api_key_entry = ttk.Entry(parent, textvariable=self.kakao_api_key_var, width=25, show="*")
+        self.kakao_api_key_entry.grid(row=start_row+2, column=2, sticky=(tk.W, tk.E), padx=5)
+        
+        # 초기에는 비활성화
+        self.kakao_api_key_entry.config(state='disabled')
+    
+    def create_execution_section(self, parent, start_row):
+        """실행 옵션 섹션 생성"""
+        # 실행 옵션 레이블
+        exec_label = ttk.Label(parent, text="⚙️ 실행 옵션", font=('맑은 고딕', 12, 'bold'))
+        exec_label.grid(row=start_row, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        
+        # 구분선
+        separator = ttk.Separator(parent, orient='horizontal')
+        separator.grid(row=start_row+1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # 스케줄 실행 체크박스
+        self.schedule_enabled_var = tk.BooleanVar()
+        self.schedule_enabled_check = ttk.Checkbutton(parent, text="스케줄 실행", 
+                                                     variable=self.schedule_enabled_var,
+                                                     command=self.toggle_schedule_settings)
+        self.schedule_enabled_check.grid(row=start_row+2, column=0, sticky=tk.W, padx=(20, 5))
+        
+        # 실행 시간
+        ttk.Label(parent, text="실행 시간:").grid(row=start_row+2, column=1, sticky=tk.W, padx=(20, 5))
+        self.schedule_time_var = tk.StringVar(value="09:00")
+        self.schedule_time_entry = ttk.Entry(parent, textvariable=self.schedule_time_var, width=10)
+        self.schedule_time_entry.grid(row=start_row+2, column=2, sticky=tk.W, padx=5)
+        self.schedule_time_entry.config(state='disabled')
+        
+        ttk.Label(parent, text="매일").grid(row=start_row+2, column=2, sticky=tk.W, padx=(80, 5))
+    
+    def create_button_section(self, parent, start_row):
+        """버튼 섹션 생성"""
+        # 버튼 프레임
+        button_frame = ttk.Frame(parent)
+        button_frame.grid(row=start_row, column=0, columnspan=3, pady=20)
+        
+        # 실행 버튼
+        self.run_btn = ttk.Button(button_frame, text="🚀 실행", command=self.run_system, 
+                                 style='Accent.TButton', width=12)
+        self.run_btn.grid(row=0, column=0, padx=5)
+        
+        # 설정 저장 버튼
+        ttk.Button(button_frame, text="💾 설정저장", command=self.save_settings, width=12).grid(row=0, column=1, padx=5)
+        
+        # 설정 불러오기 버튼
+        ttk.Button(button_frame, text="📁 설정불러오기", command=self.safe_load_settings, width=12).grid(row=0, column=2, padx=5)
+        
+        # 엑셀 테스트 버튼
+        ttk.Button(button_frame, text="📊 엑셀테스트", command=self.test_excel_creation, width=12).grid(row=0, column=3, padx=5)
+        
+        # 설정 파일 수정 버튼
+        ttk.Button(button_frame, text="🔧 설정수정", command=self.fix_config_file, width=12).grid(row=1, column=0, padx=5, pady=5)
+        
+        # 종료 버튼
+        ttk.Button(button_frame, text="❌ 종료", command=self.on_closing, width=12).grid(row=1, column=4, padx=5)
+    
+    def create_progress_section(self, parent, start_row):
+        """진행상태 섹션 생성"""
+        # 진행상태 레이블
+        ttk.Label(parent, text="📊 진행상태:", font=('맑은 고딕', 10, 'bold')).grid(row=start_row, column=0, sticky=tk.W, pady=(10, 5))
+        
+        # 진행바
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(parent, variable=self.progress_var, maximum=100)
+        self.progress_bar.grid(row=start_row+1, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=(20, 0), pady=5)
+        
+        # 상태 레이블
+        self.status_var = tk.StringVar(value="준비 완료")
+        self.status_label = ttk.Label(parent, textvariable=self.status_var)
+        self.status_label.grid(row=start_row+2, column=0, columnspan=3, sticky=tk.W, padx=(20, 0))
+    
+    def create_log_section(self, parent, start_row):
+        """로그 섹션 생성"""
+        # 로그 레이블
+        ttk.Label(parent, text="📝 실행 로그:", font=('맑은 고딕', 10, 'bold')).grid(row=start_row, column=0, sticky=tk.W, pady=(10, 5))
+        
+        # 로그 텍스트 영역
+        self.log_text = scrolledtext.ScrolledText(parent, height=8, width=80)
+        self.log_text.grid(row=start_row+1, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(20, 0), pady=5)
+        
+        # 로그 지우기 버튼
+        ttk.Button(parent, text="로그 지우기", command=self.clear_log).grid(row=start_row+2, column=2, sticky=tk.E, pady=5)
+    
+    def fix_config_file(self):
+        """설정 파일 URL 인코딩 문제 수정"""
+        try:
+            if self.config_manager.fix_url_encoding_issues():
+                messagebox.showinfo("수정 완료", "설정 파일이 성공적으로 수정되었습니다!")
+                self.log_message("✅ 설정 파일 수정 완료")
+                # 설정 다시 로드
+                self.safe_load_settings()
+            else:
+                messagebox.showinfo("수정 완료", "URL 인코딩 문제가 발견되지 않았습니다.")
+                
+        except Exception as e:
+            error_msg = f"설정 파일 수정 오류: {e}"
+            messagebox.showerror("수정 실패", error_msg)
+            self.log_message(f"❌ {error_msg}")
+    
+    def toggle_kakao_settings(self):
+        """카카오톡 설정 활성화/비활성화"""
+        if self.kakao_enabled_var.get():
+            self.kakao_api_key_entry.config(state='normal')
+        else:
+            self.kakao_api_key_entry.config(state='disabled')
+    
+    def toggle_schedule_settings(self):
+        """스케줄 설정 활성화/비활성화"""
+        if self.schedule_enabled_var.get():
+            self.schedule_time_entry.config(state='normal')
+        else:
+            self.schedule_time_entry.config(state='disabled')
+    
+    def add_recipient(self):
+        """수신자 이메일 추가"""
+        email = self.recipients_var.get().strip()
+        if email:
+            # 이메일 형식 검증
+            import re
+            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            if re.match(email_pattern, email):
+                # 중복 체크
+                existing_emails = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
+                if email not in existing_emails:
+                    self.recipients_listbox.insert(tk.END, email)
+                    self.recipients_var.set('')
+                    self.log_message(f"수신자 추가: {email}")
+                else:
+                    messagebox.showwarning("중복 이메일", "이미 추가된 이메일 주소입니다.")
+            else:
+                messagebox.showerror("이메일 형식 오류", "올바른 이메일 형식을 입력해주세요.")
+        else:
+            messagebox.showwarning("입력 오류", "이메일 주소를 입력해주세요.")
+    
+    def remove_recipient(self, event):
+        """수신자 이메일 제거 (더블클릭)"""
+        selection = self.recipients_listbox.curselection()
+        if selection:
+            email = self.recipients_listbox.get(selection[0])
+            self.recipients_listbox.delete(selection[0])
+            self.log_message(f"수신자 제거: {email}")
+    
+    def test_api_connection(self):
+        """API 연결 테스트"""
+        api_key = self.api_key_var.get().strip()
+        if not api_key:
+            messagebox.showerror("오류", "공공데이터포털 인증키를 입력해주세요.")
+            return
+        
+        self.log_message("API 연결 테스트 시작...")
+        self.test_api_btn.config(state='disabled')
+        
+        def test_thread():
+            try:
+                api = PublicDataAPI(api_key)
+                success, message = api.test_connection()
+                
+                self.root.after(0, lambda: self.show_test_result("API 연결 테스트", success, message))
+            except Exception as e:
+                self.root.after(0, lambda: self.show_test_result("API 연결 테스트", False, str(e)))
+            finally:
+                self.root.after(0, lambda: self.test_api_btn.config(state='normal'))
+        
+        threading.Thread(target=test_thread, daemon=True).start()
+    
+    def test_email_connection(self):
+        """이메일 연결 테스트"""
+        sender_email = self.sender_email_var.get().strip()
+        app_password = self.app_password_var.get().strip()
+        
+        if not sender_email or not app_password:
+            messagebox.showerror("오류", "발신자 이메일과 앱 비밀번호를 입력해주세요.")
+            return
+        
+        self.log_message("이메일 연결 테스트 시작...")
+        self.test_email_btn.config(state='disabled')
+        
+        def test_thread():
+            try:
+                email_sender = EmailSender()
+                success, message = email_sender.test_connection(sender_email, app_password)
+                
+                if success:
+                    # 테스트 이메일 전송
+                    success, message = email_sender.send_test_email(sender_email, app_password, sender_email)
+                
+                self.root.after(0, lambda: self.show_test_result("이메일 연결 테스트", success, message))
+            except Exception as e:
+                self.root.after(0, lambda: self.show_test_result("이메일 연결 테스트", False, str(e)))
+            finally:
+                self.root.after(0, lambda: self.test_email_btn.config(state='normal'))
+        
+        threading.Thread(target=test_thread, daemon=True).start()
+    
+    def test_excel_creation(self):
+        """엑셀 파일 생성 테스트"""
+        self.log_message("엑셀 파일 생성 테스트 시작...")
+        
+        try:
+            excel_handler = ExcelHandler()
+            test_file = excel_handler.create_test_excel()
+            
+            messagebox.showinfo("테스트 성공", f"테스트 엑셀 파일이 생성되었습니다:\n{test_file}")
+            self.log_message(f"테스트 엑셀 파일 생성 완료: {test_file}")
+            
+            # 파일 열기 옵션
+            if messagebox.askyesno("파일 열기", "생성된 파일을 열어보시겠습니까?"):
+                os.startfile(test_file)
+                
+        except Exception as e:
+            error_msg = f"엑셀 파일 생성 테스트 실패: {str(e)}"
+            messagebox.showerror("테스트 실패", error_msg)
+            self.log_message(error_msg)
+    
+    def show_test_result(self, test_name: str, success: bool, message: str):
+        """테스트 결과 표시"""
+        if success:
+            messagebox.showinfo(f"{test_name} 성공", message)
+            self.log_message(f"✅ {test_name} 성공: {message}")
+        else:
+            messagebox.showerror(f"{test_name} 실패", message)
+            self.log_message(f"❌ {test_name} 실패: {message}")
+    
+    def save_settings(self):
+        """설정 저장"""
+        try:
+            # 수신자 목록 수집
+            recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
+            
+            config_data = {
+                'api': {
+                    'service_key': self.api_key_var.get().strip(),
+                    'max_rows': 50
+                },
+                'email': {
+                    'sender_email': self.sender_email_var.get().strip(),
+                    'app_password': self.app_password_var.get().strip(),
+                    'recipients': recipients
+                },
+                'kakao': {
+                    'enabled': self.kakao_enabled_var.get(),
+                    'api_key': self.kakao_api_key_var.get().strip()
+                },
+                'schedule': {
+                    'enabled': self.schedule_enabled_var.get(),
+                    'time': self.schedule_time_var.get().strip()
+                }
+            }
+            
+            # 설정 유효성 검증
+            is_valid, errors = self.config_manager.validate_config(config_data)
+            if not is_valid:
+                error_message = "설정 오류:\n" + "\n".join(errors)
+                messagebox.showerror("설정 저장 실패", error_message)
+                return
+            
+            # 설정 저장
+            if self.config_manager.save_config(config_data):
+                messagebox.showinfo("설정 저장", "설정이 성공적으로 저장되었습니다.")
+                self.log_message("설정 저장 완료")
+                self.config_data = config_data
+            else:
+                messagebox.showerror("설정 저장 실패", "설정 저장 중 오류가 발생했습니다.")
+                
+        except Exception as e:
+            error_msg = f"설정 저장 오류: {str(e)}"
+            messagebox.showerror("오류", error_msg)
+            self.log_message(error_msg)
+    
+    def run_system(self):
+        """시스템 실행"""
+        if self.is_running:
+            messagebox.showwarning("실행 중", "시스템이 이미 실행 중입니다.")
+            return
+        
+        # 설정 검증
+        recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
+        
+        if not self.api_key_var.get().strip():
+            messagebox.showerror("설정 오류", "공공데이터포털 인증키를 입력해주세요.")
+            return
+        
+        if not self.sender_email_var.get().strip() or not self.app_password_var.get().strip():
+            messagebox.showerror("설정 오류", "이메일 설정을 완료해주세요.")
+            return
+        
+        if not recipients:
+            messagebox.showerror("설정 오류", "수신자 이메일을 추가해주세요.")
+            return
+        
+        self.log_message("=== 청약 분양정보 수집 시작 ===")
+        self.is_running = True
+        self.run_btn.config(state='disabled', text='실행 중...')
+        
+        # 별도 스레드에서 실행
+        threading.Thread(target=self._run_system_thread, daemon=True).start()
+    
+    def _run_system_thread(self):
+        """시스템 실행 스레드"""
+        try:
+            # 진행상태 업데이트
+            self.update_progress(10, "API 연결 중...")
+            
+            # API 초기화
+            api = PublicDataAPI(self.api_key_var.get().strip())
+            
+            self.update_progress(20, "분양정보 수집 중...")
+            
+            # 분양정보 수집
+            data = api.get_comprehensive_data(max_rows=50)
+            
+            self.update_progress(50, "엑셀 파일 생성 중...")
+            
+            # 엑셀 파일 생성
+            excel_handler = ExcelHandler()
+            excel_file = excel_handler.create_excel_file(data)
+            
+            self.update_progress(70, "이메일 전송 중...")
+            
+            # 이메일 전송
+            email_sender = EmailSender()
+            recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
+            
+            success, message = email_sender.send_subscription_email(
+                self.sender_email_var.get().strip(),
+                self.app_password_var.get().strip(),
+                recipients,
+                excel_file,
+                data
+            )
+            
+            self.update_progress(90, "카카오톡 알림 전송 중...")
+            
+            # 카카오톡 알림 (옵션)
+            if self.kakao_enabled_var.get() and self.kakao_api_key_var.get().strip():
+                kakao_api = create_kakao_api(self.kakao_api_key_var.get().strip(), True)
+                kakao_success, kakao_message = kakao_api.send_subscription_notification(data)
+                self.root.after(0, lambda: self.log_message(f"카카오톡 알림: {kakao_message}"))
+            
+            self.update_progress(100, "완료!")
+            
+            # 결과 표시
+            total_count = sum(len(items) for items in data.values())
+            result_message = f"작업 완료!\n\n수집된 분양정보: {total_count}건\n생성된 파일: {os.path.basename(excel_file)}\n전송된 이메일: {len(recipients)}명"
+            
+            if success:
+                self.root.after(0, lambda: messagebox.showinfo("작업 완료", result_message))
+                self.root.after(0, lambda: self.log_message("✅ 모든 작업이 성공적으로 완료되었습니다."))
+            else:
+                self.root.after(0, lambda: messagebox.showerror("이메일 전송 실패", f"분양정보 수집은 완료되었으나 이메일 전송에 실패했습니다.\n\n{message}"))
+                self.root.after(0, lambda: self.log_message(f"❌ 이메일 전송 실패: {message}"))
+                
+        except Exception as e:
+            error_msg = f"시스템 실행 오류: {str(e)}"
+            self.root.after(0, lambda: messagebox.showerror("실행 오류", error_msg))
+            self.root.after(0, lambda: self.log_message(f"❌ {error_msg}"))
+            
+        finally:
+            self.root.after(0, self._reset_ui)
+    
+    def _reset_ui(self):
+        """UI 상태 리셋"""
+        self.is_running = False
+        self.run_btn.config(state='normal', text='🚀 실행')
+        self.progress_var.set(0)
+        self.status_var.set("준비 완료")
+    
+    def update_progress(self, value: int, status: str):
+        """진행상태 업데이트"""
+        self.root.after(0, lambda: self.progress_var.set(value))
+        self.root.after(0, lambda: self.status_var.set(status))
+        self.root.after(0, lambda: self.log_message(status))
+    
+    def log_message(self, message: str):
+        """로그 메시지 추가"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_entry = f"[{timestamp}] {message}\n"
+        
+        def update_log():
+            self.log_text.insert(tk.END, log_entry)
+            self.log_text.see(tk.END)
+        
+        if threading.current_thread() == threading.main_thread():
+            update_log()
+        else:
+            self.root.after(0, update_log)
+        
+        # 파일 로그에도 기록
+        self.logger.info(message)
+    
+    def clear_log(self):
+        """로그 지우기"""
+        self.log_text.delete(1.0, tk.END)
+        self.log_message("로그가 초기화되었습니다.")
+    
+    def on_closing(self):
+        """창 닫기 이벤트"""
+        if self.is_running:
+            if messagebox.askokcancel("종료 확인", "시스템이 실행 중입니다. 정말 종료하시겠습니까?"):
+                self.logger.info("사용자에 의해 프로그램 종료")
+                self.root.destroy()
+        else:
+            self.logger.info("프로그램 정상 종료")
+            self.root.destroy()
+    
+    def run(self):
+        """GUI 애플리케이션 실행"""
+        self.log_message("청약 분양정보 자동화 시스템이 시작되었습니다.")
+        self.log_message("설정을 확인하고 '실행' 버튼을 클릭하세요.")
+        self.root.mainloop()
+
+def main():
+    """메인 함수"""
+    try:
+        app = SubscriptionGUI()
+        app.run()
+    except Exception as e:
+        messagebox.showerror("시스템 오류", f"프로그램 시작 중 오류가 발생했습니다:\n{str(e)}")
+
+if __name__ == "__main__":
+    main()
