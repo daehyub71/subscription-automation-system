@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-메인 GUI 창 모듈 (날짜 필터링 기능 추가)
+메인 GUI 창 모듈 (완전한 오류 수정 버전)
 파일명: gui/main_window.py
 작성자: 청약 자동화 시스템
-설명: tkinter를 사용한 메인 사용자 인터페이스 (날짜 필터링 포함)
+설명: tkinter를 사용한 메인 사용자 인터페이스
 """
 
 import tkinter as tk
@@ -66,8 +66,7 @@ except ImportError:
                 'naver_api': {'enabled': False, 'client_id': '', 'client_secret': ''},
                 'email': {'sender_email': '', 'app_password': '', 'recipients': []},
                 'kakao': {'enabled': False, 'api_key': ''},
-                'schedule': {'enabled': False, 'time': '09:00'},
-                'filter': {'date_filter_enabled': True}  # 날짜 필터링 기본값
+                'schedule': {'enabled': False, 'time': '09:00'}
             }
         
         def save_config(self, config_data):
@@ -97,7 +96,7 @@ except ImportError:
             self.service_key = service_key
         def test_connection(self):
             return True, "API 모듈을 찾을 수 없습니다"
-        def get_comprehensive_data(self, max_rows=50, date_filter=True):
+        def get_comprehensive_data(self, max_rows=50):
             return {'apt': [], 'officetel': [], 'remndr': [], 'public_rent': [], 'opt': []}
 
 try:
@@ -146,9 +145,6 @@ class SubscriptionGUI:
         self.naver_client_id_var = tk.StringVar()
         self.naver_client_secret_var = tk.StringVar()
         
-        # 날짜 필터링 변수 초기화
-        self.date_filter_enabled_var = tk.BooleanVar(value=True)  # 기본값: 활성화
-        
         # 로깅 설정
         self.setup_logging()
         
@@ -163,8 +159,8 @@ class SubscriptionGUI:
     
     def setup_window(self):
         """메인 창 설정"""
-        self.root.title("🏠 청약 분양정보 자동화 시스템 v1.1 (날짜필터링)")
-        self.root.geometry("800x850")  # 높이 추가 증가
+        self.root.title("🏠 청약 분양정보 자동화 시스템 v1.0")
+        self.root.geometry("800x800")  # 높이 증가
         self.root.resizable(True, True)
         
         # 창 아이콘 설정 (선택사항)
@@ -235,10 +231,6 @@ class SubscriptionGUI:
             self.naver_client_secret_var.set(naver_config.get('client_secret', ''))
             self.toggle_naver_settings()
             
-            # 필터 설정 로드
-            filter_config = self.config_data.get('filter', {})
-            self.date_filter_enabled_var.set(filter_config.get('date_filter_enabled', True))
-            
             # 이메일 설정
             email_config = self.config_data.get('email', {})
             self.sender_email_var.set(email_config.get('sender_email', ''))
@@ -263,7 +255,7 @@ class SubscriptionGUI:
             self.schedule_time_var.set(schedule_config.get('time', '09:00'))
             self.toggle_schedule_settings()
             
-            self.log_message("✅ 설정 UI 로드 완료 (네이버 API 및 날짜 필터링 포함)")
+            self.log_message("✅ 설정 UI 로드 완료 (네이버 API 포함)")
             
         except Exception as e:
             self.log_message(f"❌ UI 로드 오류: {e}")
@@ -289,10 +281,6 @@ class SubscriptionGUI:
         
         # API 설정 섹션
         self.create_api_section(main_frame, current_row)
-        current_row += 3
-        
-        # 필터 설정 섹션 추가
-        self.create_filter_section(main_frame, current_row)
         current_row += 3
         
         # 네이버 API 설정 섹션 추가
@@ -341,33 +329,6 @@ class SubscriptionGUI:
         # API 테스트 버튼
         self.test_api_btn = ttk.Button(parent, text="테스트", command=self.test_api_connection)
         self.test_api_btn.grid(row=start_row+2, column=2, padx=(5, 0))
-    
-    def create_filter_section(self, parent, start_row):
-        """필터 설정 섹션 생성"""
-        # 필터 설정 레이블
-        filter_label = ttk.Label(parent, text="🔍 필터 설정", font=('맑은 고딕', 12, 'bold'))
-        filter_label.grid(row=start_row, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
-        
-        # 구분선
-        separator = ttk.Separator(parent, orient='horizontal')
-        separator.grid(row=start_row+1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        # 날짜 필터링 체크박스
-        self.date_filter_check = ttk.Checkbutton(
-            parent, 
-            text="📅 진행중/예정 분양만 수집 (청약접수 중이거나 당첨발표 예정)", 
-            variable=self.date_filter_enabled_var
-        )
-        self.date_filter_check.grid(row=start_row+2, column=0, columnspan=3, sticky=tk.W, padx=(20, 5))
-        
-        # 설명 레이블
-        description_label = ttk.Label(
-            parent, 
-            text="   ℹ️ 체크 시: (청약접수시작일 ≤ 오늘 ≤ 청약접수종료일) 또는 (당첨발표일 ≥ 오늘) 조건만 수집",
-            font=('맑은 고딕', 9),
-            foreground='gray'
-        )
-        description_label.grid(row=start_row+2, column=0, columnspan=3, sticky=tk.W, padx=(20, 5), pady=(25, 0))
     
     def create_naver_api_section(self, parent, start_row):
         """네이버 API 설정 섹션 생성"""
@@ -697,7 +658,7 @@ class SubscriptionGUI:
             self.log_message(f"❌ {test_name} 실패: {message}")
     
     def save_settings_with_naver(self):
-        """설정 저장 (네이버 API 및 날짜 필터링 포함)"""
+        """설정 저장 (네이버 API 포함)"""
         try:
             # 수신자 목록 수집
             recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
@@ -711,9 +672,6 @@ class SubscriptionGUI:
                     'enabled': self.naver_enabled_var.get(),
                     'client_id': self.naver_client_id_var.get().strip(),
                     'client_secret': self.naver_client_secret_var.get().strip()
-                },
-                'filter': {
-                    'date_filter_enabled': self.date_filter_enabled_var.get()
                 },
                 'email': {
                     'sender_email': self.sender_email_var.get().strip(),
@@ -740,7 +698,7 @@ class SubscriptionGUI:
             # 설정 저장
             if self.config_manager.save_config(config_data):
                 messagebox.showinfo("설정 저장", "설정이 성공적으로 저장되었습니다.")
-                self.log_message("설정 저장 완료 (네이버 API 및 날짜 필터링 포함)")
+                self.log_message("설정 저장 완료 (네이버 API 포함)")
                 self.config_data = config_data
             else:
                 messagebox.showerror("설정 저장 실패", "설정 저장 중 오류가 발생했습니다.")
@@ -982,12 +940,7 @@ class SubscriptionGUI:
             messagebox.showerror("설정 오류", "수신자 이메일을 추가해주세요.")
             return
         
-        # 날짜 필터링 상태 확인
-        date_filter_enabled = self.date_filter_enabled_var.get()
-        filter_status = "진행중/예정 분양만" if date_filter_enabled else "모든 분양"
-        
         self.log_message("=== 청약 분양정보 수집 시작 ===")
-        self.log_message(f"🔍 필터링 설정: {filter_status}")
         self.is_running = True
         self.run_btn.config(state='disabled', text='실행 중...')
         
@@ -1005,11 +958,8 @@ class SubscriptionGUI:
             
             self.update_progress(20, "분양정보 수집 중...")
             
-            # 날짜 필터링 설정
-            date_filter_enabled = self.date_filter_enabled_var.get()
-            
-            # 분양정보 수집 (날짜 필터링 적용)
-            data = api.get_comprehensive_data(max_rows=50, date_filter=date_filter_enabled)
+            # 분양정보 수집
+            data = api.get_comprehensive_data(max_rows=50)
             
             self.update_progress(40, "엑셀 파일 생성 중...")
             
@@ -1083,10 +1033,8 @@ class SubscriptionGUI:
             
             # 결과 표시
             total_count = sum(len(items) for items in data.values())
-            filter_info = "\n📅 필터링: 진행중/예정 분양만" if date_filter_enabled else "\n📅 필터링: 모든 분양"
-            naver_info = "\n📊 네이버 API 시장분석 포함" if naver_results else ""
-            
-            result_message = f"작업 완료!\n\n수집된 분양정보: {total_count}건\n생성된 파일: {os.path.basename(excel_file)}\n전송된 이메일: {len(recipients)}명{filter_info}{naver_info}"
+            naver_info = "\n네이버 API 시장분석 포함" if naver_results else ""
+            result_message = f"작업 완료!\n\n수집된 분양정보: {total_count}건\n생성된 파일: {os.path.basename(excel_file)}\n전송된 이메일: {len(recipients)}명{naver_info}"
             
             if success:
                 self.root.after(0, lambda: messagebox.showinfo("작업 완료", result_message))

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-공공데이터포털 API 연동 모듈 (날짜 필터링 추가)
+공공데이터포털 API 연동 모듈
 파일명: api/public_data.py
 작성자: 청약 자동화 시스템
-설명: 청약홈 분양정보 조회 서비스 API 연동 (수정버전 - 날짜 필터링 포함)
+설명: 청약홈 분양정보 조회 서비스 API 연동 (수정버전)
 """
 
 import requests
@@ -13,7 +13,6 @@ import time
 import logging
 from typing import List, Dict, Optional
 from urllib.parse import urlencode
-from datetime import datetime, date
 
 class PublicDataAPI:
     """공공데이터포털 청약홈 분양정보 API 클래스"""
@@ -43,82 +42,6 @@ class PublicDataAPI:
             'opt_detail': f"{self.base_url}/getOPTLttotPblancDetail",  # 임의공급 분양정보 상세조회
             'opt_model': f"{self.base_url}/getOPTLttotPblancMdl"  # 임의공급 분양정보 주택형별 상세조회
         }
-    
-    def _parse_date(self, date_str: str) -> Optional[date]:
-        """
-        날짜 문자열을 date 객체로 변환
-        Args:
-            date_str (str): 날짜 문자열 (YYYY-MM-DD 또는 YYYYMMDD 형식)
-        Returns:
-            Optional[date]: 파싱된 날짜 객체 또는 None
-        """
-        if not date_str or date_str.strip() == "":
-            return None
-        
-        date_str = date_str.strip().replace('-', '')  # 하이픈 제거
-        
-        try:
-            # YYYYMMDD 형식으로 파싱
-            if len(date_str) == 8 and date_str.isdigit():
-                return datetime.strptime(date_str, '%Y%m%d').date()
-            # YYYY-MM-DD 형식 처리
-            elif len(date_str) == 10:
-                return datetime.strptime(date_str.replace('-', ''), '%Y%m%d').date()
-        except ValueError:
-            self.logger.warning(f"날짜 파싱 실패: {date_str}")
-            return None
-        
-        return None
-    
-    def _is_current_or_upcoming_subscription(self, item: Dict) -> bool:
-        """
-        현재 진행 중이거나 곧 당첨발표가 있는 분양정보인지 확인
-        조건: (청약접수시작일 <= 오늘 <= 청약접수종료일) OR (당첨발표일 >= 오늘)
-        
-        Args:
-            item (Dict): 분양정보 항목
-        Returns:
-            bool: 조건을 만족하면 True
-        """
-        today = date.today()
-        
-        # APT의 경우
-        rcept_bgnde = self._parse_date(item.get('RCEPT_BGNDE', ''))  # 청약접수시작일
-        rcept_endde = self._parse_date(item.get('RCEPT_ENDDE', ''))  # 청약접수종료일
-        
-        # 오피스텔의 경우 (필드명이 다를 수 있음)
-        if not rcept_bgnde:
-            rcept_bgnde = self._parse_date(item.get('SUBSCRPT_RCEPT_BGNDE', ''))
-        if not rcept_endde:
-            rcept_endde = self._parse_date(item.get('SUBSCRPT_RCEPT_ENDDE', ''))
-        
-        przwner_presnatn_de = self._parse_date(item.get('PRZWNER_PRESNATN_DE', ''))  # 당첨발표일
-        
-        # 조건 1: 청약접수 기간 중 (접수시작일 <= 오늘 <= 접수종료일)
-        is_in_subscription_period = False
-        if rcept_bgnde and rcept_endde:
-            is_in_subscription_period = rcept_bgnde <= today <= rcept_endde
-        
-        # 조건 2: 당첨발표일이 오늘 이후
-        is_upcoming_announcement = False
-        if przwner_presnatn_de:
-            is_upcoming_announcement = przwner_presnatn_de >= today
-        
-        # 두 조건 중 하나라도 만족하면 True
-        result = is_in_subscription_period or is_upcoming_announcement
-        
-        if result:
-            self.logger.debug(f"필터링 통과: {item.get('HOUSE_NM', 'N/A')} - "
-                            f"접수기간: {rcept_bgnde}~{rcept_endde}, "
-                            f"발표일: {przwner_presnatn_de}, "
-                            f"오늘: {today}")
-        else:
-            self.logger.debug(f"필터링 제외: {item.get('HOUSE_NM', 'N/A')} - "
-                            f"접수기간: {rcept_bgnde}~{rcept_endde}, "
-                            f"발표일: {przwner_presnatn_de}, "
-                            f"오늘: {today}")
-        
-        return result
     
     def test_connection(self) -> tuple[bool, str]:
         """
@@ -178,13 +101,12 @@ class PublicDataAPI:
             self.logger.error(error_msg)
             return False, error_msg
     
-    def get_apt_subscription_list(self, max_rows: int = 150, filters: Dict = None, date_filter: bool = True) -> List[Dict]:
+    def get_apt_subscription_list(self, max_rows: int = 150, filters: Dict = None) -> List[Dict]:
         """
         APT 분양정보 목록 조회
         Args:
             max_rows (int): 최대 조회 건수
             filters (Dict): 필터 조건
-            date_filter (bool): 날짜 필터링 적용 여부
         Returns:
             List[Dict]: APT 분양정보 목록
         """
@@ -192,7 +114,7 @@ class PublicDataAPI:
         
         try:
             max_rows = 150
-            self.logger.info(f"APT 분양정보 목록 조회 시작 (최대 {max_rows}건, 날짜필터: {date_filter})")
+            self.logger.info(f"APT 분양정보 목록 조회 시작 (최대 {max_rows}건)")
             
             # 기본 파라미터
             params = {
@@ -240,23 +162,14 @@ class PublicDataAPI:
             
             # 데이터 추출
             items = data['data']
-            self.logger.info(f"원본 APT 분양정보: {len(items)}건")
+            self.logger.info(f"조회된 APT 분양정보: {len(items)}건")
             
-            filtered_count = 0
             for item in items:
-                # 날짜 필터링 적용
-                if date_filter and not self._is_current_or_upcoming_subscription(item):
-                    continue
-                
                 subscription_info = self._parse_apt_subscription_item(item)
                 if subscription_info:
                     subscription_list.append(subscription_info)
-                    filtered_count += 1
             
-            if date_filter:
-                self.logger.info(f"날짜 필터링 후 APT 분양정보: {filtered_count}건 (제외: {len(items) - filtered_count}건)")
-            else:
-                self.logger.info(f"APT 분양정보 목록 조회 완료: {len(subscription_list)}건")
+            self.logger.info(f"APT 분양정보 목록 조회 완료: {len(subscription_list)}건")
             
         except Exception as e:
             self.logger.error(f"APT 분양정보 목록 조회 오류: {e}")
@@ -264,18 +177,17 @@ class PublicDataAPI:
         
         return subscription_list
     
-    def get_officetel_subscription_list(self, max_rows: int = 150, filters: Dict = None, date_filter: bool = True) -> List[Dict]:
+    def get_officetel_subscription_list(self, max_rows: int = 150, filters: Dict = None) -> List[Dict]:
         """
         오피스텔/도시형/민간임대 분양정보 목록 조회
         Args:
             max_rows (int): 최대 조회 건수
             filters (Dict): 필터 조건
-            date_filter (bool): 날짜 필터링 적용 여부
         Returns:
             List[Dict]: 오피스텔 분양정보 목록
         """
         try:
-            self.logger.info(f"오피스텔 분양정보 목록 조회 시작 (최대 {max_rows}건, 날짜필터: {date_filter})")
+            self.logger.info(f"오피스텔 분양정보 목록 조회 시작 (최대 {max_rows}건)")
             
             params = {
                 'serviceKey': self.service_key,
@@ -307,39 +219,26 @@ class PublicDataAPI:
             
             # 데이터 추출
             items = data['data']
-            self.logger.info(f"원본 오피스텔 분양정보: {len(items)}건")
-            
             officetel_list = []
-            filtered_count = 0
             
             for item in items:
-                # 날짜 필터링 적용
-                if date_filter and not self._is_current_or_upcoming_subscription(item):
-                    continue
-                
                 officetel_info = self._parse_officetel_subscription_item(item)
                 if officetel_info:
                     officetel_list.append(officetel_info)
-                    filtered_count += 1
             
-            if date_filter:
-                self.logger.info(f"날짜 필터링 후 오피스텔 분양정보: {filtered_count}건 (제외: {len(items) - filtered_count}건)")
-            else:
-                self.logger.info(f"오피스텔 분양정보 조회 완료: {len(officetel_list)}건")
-            
+            self.logger.info(f"오피스텔 분양정보 조회 완료: {len(officetel_list)}건")
             return officetel_list
             
         except Exception as e:
             self.logger.error(f"오피스텔 분양정보 조회 오류: {e}")
             raise
     
-    def get_comprehensive_data(self, max_rows: int = 150, filters: Dict = None, date_filter: bool = True) -> Dict[str, List[Dict]]:
+    def get_comprehensive_data(self, max_rows: int = 150, filters: Dict = None) -> Dict[str, List[Dict]]:
         """
         종합 분양정보 조회 (APT + 오피스텔 + 기타)
         Args:
             max_rows (int): 각 카테고리별 최대 조회 건수
             filters (Dict): 필터 조건
-            date_filter (bool): 날짜 필터링 적용 여부
         Returns:
             Dict[str, List[Dict]]: 카테고리별 분양정보
         """
@@ -352,34 +251,28 @@ class PublicDataAPI:
         }
         
         try:
-            filter_msg = "날짜 필터링 적용" if date_filter else "모든 데이터"
-            self.logger.info(f"종합 분양정보 조회 시작 ({filter_msg})")
+            self.logger.info("종합 분양정보 조회 시작")
             
             # APT 분양정보 조회
             try:
-                comprehensive_data['apt'] = self.get_apt_subscription_list(max_rows, filters, date_filter)
+                comprehensive_data['apt'] = self.get_apt_subscription_list(max_rows, filters)
             except Exception as e:
                 self.logger.error(f"APT 분양정보 조회 실패: {e}")
             
             # 오피스텔 분양정보 조회
             try:
-                comprehensive_data['officetel'] = self.get_officetel_subscription_list(max_rows, filters, date_filter)
+                comprehensive_data['officetel'] = self.get_officetel_subscription_list(max_rows, filters)
             except Exception as e:
                 self.logger.error(f"오피스텔 분양정보 조회 실패: {e}")
             
             # 통계 로그
             total_count = sum(len(data) for data in comprehensive_data.values())
-            self.logger.info(f"종합 분양정보 조회 완료: 총 {total_count}건 ({filter_msg})")
+            self.logger.info(f"종합 분양정보 조회 완료: 총 {total_count}건")
             self.logger.info(f"  - APT: {len(comprehensive_data['apt'])}건")
             self.logger.info(f"  - 오피스텔: {len(comprehensive_data['officetel'])}건")
             self.logger.info(f"  - 잔여세대: {len(comprehensive_data['remndr'])}건")
             self.logger.info(f"  - 공공지원임대: {len(comprehensive_data['public_rent'])}건")
             self.logger.info(f"  - 임의공급: {len(comprehensive_data['opt'])}건")
-            
-            if date_filter and total_count > 0:
-                today = date.today()
-                self.logger.info(f"📅 필터링 기준일: {today}")
-                self.logger.info("📋 필터링 조건: (청약접수시작일 ≤ 오늘 ≤ 청약접수종료일) 또는 (당첨발표일 ≥ 오늘)")
             
         except Exception as e:
             self.logger.error(f"종합 분양정보 조회 오류: {e}")

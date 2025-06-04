@@ -464,58 +464,106 @@ class EmailSender:
         return html_body
     
     def _generate_recent_items_html(self, data_summary: Dict) -> str:
-        """최신 분양정보 HTML 생성"""
-        # 최신 분양정보 (상위 5개)
-        all_items = []
+        """분양정보 HTML 생성 (아파트 20개 이하면 모든 아파트 표시)"""
+        # 아파트 분양정보 개수 확인
+        apt_items = data_summary.get('apt', [])
+        apt_count = len(apt_items)
         
-        for category, items in data_summary.items():
-            if isinstance(items, list):
-                for item in items:
-                    item_with_category = item.copy()
-                    item_with_category['분양유형'] = {
-                        'general': '일반분양',
-                        'apt': 'APT분양',
-                        'officetel': '오피스텔분양'
-                    }.get(category, category)
-                    all_items.append(item_with_category)
+        # 아파트 분양이 20개 이하인 경우: 모든 아파트 분양정보 표시
+        if apt_count <= 20 and apt_count > 0:
+            display_items = []
+            for item in apt_items:
+                item_with_category = item.copy()
+                item_with_category['분양유형'] = 'APT분양'
+                display_items.append(item_with_category)
+            
+            # 최신순 정렬
+            try:
+                display_items.sort(key=lambda x: x.get('모집공고일', ''), reverse=True)
+            except:
+                pass
+            
+            title = f"🏠 APT 분양정보 (전체 {apt_count}개)"
+            
+        else:
+            # 아파트 분양이 20개 초과이거나 0개인 경우: 기존 로직 (최신 5개)
+            all_items = []
+            
+            for category, items in data_summary.items():
+                if isinstance(items, list):
+                    for item in items:
+                        item_with_category = item.copy()
+                        item_with_category['분양유형'] = {
+                            'general': '일반분양',
+                            'apt': 'APT분양',
+                            'officetel': '오피스텔분양'
+                        }.get(category, category)
+                        all_items.append(item_with_category)
+            
+            # 최신순 정렬
+            try:
+                all_items.sort(key=lambda x: x.get('모집공고일', ''), reverse=True)
+                display_items = all_items[:5]
+            except:
+                display_items = all_items[:5]
+            
+            title = "🏠 최신 분양정보 (상위 5개)"
         
-        # 최신순 정렬
-        try:
-            all_items.sort(key=lambda x: x.get('모집공고일', ''), reverse=True)
-            recent_items = all_items[:5]
-        except:
-            recent_items = all_items[:5]
-        
-        if not recent_items:
+        if not display_items:
             return '<p style="color: #666; text-align: center; padding: 20px;">표시할 분양정보가 없습니다.</p>'
         
-        # 최신 분양정보 HTML 생성
-        recent_items_html = ""
-        for i, item in enumerate(recent_items, 1):
-            recent_items_html += f"""
+        # 분양정보 HTML 생성
+        items_html = ""
+        for i, item in enumerate(display_items, 1):
+            # 청약접수 상태 확인
+            today = datetime.now().strftime('%Y%m%d')
+            rcept_start = item.get('청약접수시작일', '').replace('-', '')
+            rcept_end = item.get('청약접수종료일', '').replace('-', '')
+            
+            status = ""
+            if rcept_start and rcept_end:
+                if rcept_start <= today <= rcept_end:
+                    status = '<span style="color: #e74c3c; font-weight: bold;">🔥 접수중</span>'
+                elif today < rcept_start:
+                    status = '<span style="color: #3498db; font-weight: bold;">⏰ 예정</span>'
+                elif today > rcept_end:
+                    status = '<span style="color: #95a5a6;">✅ 완료</span>'
+            
+            items_html += f"""
             <tr style="background-color: {'#f9f9f9' if i % 2 == 0 else '#ffffff'};">
                 <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">{i}</td>
                 <td style="padding: 8px; border: 1px solid #ddd;">{item.get('분양유형', '')}</td>
-                <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">{item.get('주택명', '')}</td>
+                <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">
+                    {item.get('주택명', '')}<br>
+                    <small style="color: #666;">{item.get('공급위치', '')}</small>
+                </td>
                 <td style="padding: 8px; border: 1px solid #ddd;">{item.get('공급지역', '')}</td>
-                <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">{item.get('모집공고일', '')}</td>
+                <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">
+                    {item.get('모집공고일', '')}<br>
+                    {status}
+                </td>
+                <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">
+                    <small>{item.get('청약접수시작일', '')}</small><br>
+                    <small>~{item.get('청약접수종료일', '')}</small>
+                </td>
             </tr>
             """
         
         return f'''
-        <h3 style="color: #4F81BD; margin-top: 30px;">🏠 최신 분양정보 (상위 5개)</h3>
+        <h3 style="color: #4F81BD; margin-top: 30px;">{title}</h3>
         <table class="recent-table">
             <thead>
                 <tr>
-                    <th style="width: 60px;">순번</th>
-                    <th style="width: 100px;">분양유형</th>
-                    <th style="width: 200px;">주택명</th>
-                    <th style="width: 150px;">공급지역</th>
-                    <th style="width: 100px;">모집공고일</th>
+                    <th style="width: 50px;">순번</th>
+                    <th style="width: 80px;">분양유형</th>
+                    <th style="width: 250px;">주택명/위치</th>
+                    <th style="width: 100px;">공급지역</th>
+                    <th style="width: 120px;">모집공고일/상태</th>
+                    <th style="width: 130px;">청약접수기간</th>
                 </tr>
             </thead>
             <tbody>
-                {recent_items_html}
+                {items_html}
             </tbody>
         </table>
         '''
