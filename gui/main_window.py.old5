@@ -195,18 +195,6 @@ class SubscriptionGUI:
         # 상태 업데이트 스레드 시작
         self.start_status_update_thread()
     
-    def setup_scheduler(self):
-        """스케줄러 설정"""
-        try:
-            self.scheduler = SystemScheduler(
-                target_function=self.scheduled_system_run,
-                log_callback=self.log_message
-            )
-            self.log_message("📅 스케줄러 초기화 완료")
-        except Exception as e:
-            self.log_message(f"❌ 스케줄러 초기화 오류: {e}")
-            self.scheduler = None
-    
     def start_status_update_thread(self):
         """상태 업데이트 스레드 시작"""
         def status_update_loop():
@@ -338,18 +326,6 @@ class SubscriptionGUI:
         self.logger = logging.getLogger(__name__)
         self.logger.info("청약 분양정보 자동화 시스템 시작")
     
-    def setup_scheduler(self):
-        """스케줄러 설정"""
-        try:
-            self.scheduler = SystemScheduler(
-                target_function=self.scheduled_system_run,
-                log_callback=self.log_message
-            )
-            self.log_message("📅 스케줄러 초기화 완료")
-        except Exception as e:
-            self.log_message(f"❌ 스케줄러 초기화 오류: {e}")
-            self.scheduler = None
-    
     def safe_load_settings(self):
         """설정 안전하게 로드 (URL 인코딩 문제 해결)"""
         try:
@@ -413,129 +389,6 @@ class SubscriptionGUI:
             
         except Exception as e:
             self.log_message(f"❌ UI 로드 오류: {e}")
-    
-    def scheduled_system_run(self):
-        """스케줄러에 의한 시스템 실행"""
-        try:
-            self.log_message("🔔 스케줄된 시간에 따른 자동 실행 시작")
-            
-            # 메인 스레드에서 실행되도록 콜백
-            self.root.after(0, self._execute_scheduled_run)
-            
-        except Exception as e:
-            self.log_message(f"❌ 스케줄 실행 오류: {e}")
-    
-    def _execute_scheduled_run(self):
-        """스케줄 실행 (메인 스레드에서)"""
-        try:
-            # 설정 검증
-            if not self._validate_settings_for_scheduled_run():
-                return
-            
-            # 기존 실행 중인지 체크
-            if self.is_running:
-                self.log_message("⚠️ 시스템이 이미 실행 중이므로 스케줄 실행을 건너뜁니다")
-                return
-            
-            self.log_message("🚀 스케줄된 자동 실행 진행")
-            
-            # 별도 스레드에서 실행
-            threading.Thread(target=self._run_system_thread, args=(True,), daemon=True).start()
-            
-        except Exception as e:
-            self.log_message(f"❌ 스케줄 실행 오류: {e}")
-    
-    def _validate_settings_for_scheduled_run(self) -> bool:
-        """스케줄 실행을 위한 설정 검증"""
-        try:
-            recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
-            
-            if not self.api_key_var.get().strip():
-                self.log_message("❌ 스케줄 실행 실패: API 서비스키가 없습니다")
-                return False
-            
-            if not self.sender_email_var.get().strip() or not self.app_password_var.get().strip():
-                self.log_message("❌ 스케줄 실행 실패: 이메일 설정이 없습니다")
-                return False
-            
-            if not recipients:
-                self.log_message("❌ 스케줄 실행 실패: 수신자 이메일이 없습니다")
-                return False
-            
-            self.log_message("✅ 스케줄 실행 설정 검증 완료")
-            return True
-            
-        except Exception as e:
-            self.log_message(f"❌ 설정 검증 오류: {e}")
-            return False
-    
-    def start_status_update_thread(self):
-        """상태 업데이트 스레드 시작"""
-        def status_update_loop():
-            while True:
-                try:
-                    # 스케줄러 상태 업데이트 (10초마다)
-                    if self.scheduler:
-                        self.update_scheduler_status()
-                    
-                    # 10초 대기
-                    import time
-                    time.sleep(10)
-                    
-                except Exception as e:
-                    self.log_message(f"❌ 상태 업데이트 오류: {e}")
-                    import time
-                    time.sleep(30)
-        
-        threading.Thread(target=status_update_loop, daemon=True).start()
-    
-    def update_scheduler_status(self):
-        """스케줄러 상태 업데이트"""
-        try:
-            if hasattr(self, 'scheduler_status_label') and self.scheduler:
-                status = self.scheduler.get_status()
-                next_info = self.scheduler.get_next_execution_info()
-                
-                # UI 업데이트는 메인 스레드에서
-                self.root.after(0, lambda: self.scheduler_status_label.config(text=f"📅 {next_info}"))
-                
-        except Exception as e:
-            self.logger.error(f"스케줄러 상태 업데이트 오류: {e}")
-    
-    def _update_scheduler_settings(self):
-        """스케줄러 설정 업데이트"""
-        try:
-            if not self.scheduler:
-                return
-            
-            is_enabled = self.schedule_enabled_var.get()
-            target_time = self.schedule_time_var.get().strip()
-            
-            # 상세 로그
-            self.log_message(f"📅 스케줄러 설정 업데이트: {'활성화' if is_enabled else '비활성화'}, 시간: {target_time}")
-            
-            if is_enabled and target_time:
-                # 시간 형식 검증
-                try:
-                    hour, minute = map(int, target_time.split(':'))
-                    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-                        raise ValueError("잘못된 시간 범위")
-                    
-                    self.scheduler.set_schedule(True, target_time)
-                    self.log_message(f"✅ 스케줄 설정 완료: 매일 {target_time}에 자동 실행")
-                    
-                except ValueError as e:
-                    self.log_message(f"❌ 시간 형식 오류: {target_time} - HH:MM 형식으로 입력하세요")
-                    # 체크박스 비활성화
-                    self.schedule_enabled_var.set(False)
-                    self.schedule_time_entry.config(state='disabled')
-                    return
-            else:
-                self.scheduler.set_schedule(False, target_time)
-                self.log_message("📅 스케줄 실행 중지")
-                
-        except Exception as e:
-            self.log_message(f"❌ 스케줄러 설정 오류: {e}")
     
     def create_widgets(self):
         """GUI 위젯 생성"""
@@ -1587,9 +1440,8 @@ class SubscriptionGUI:
         log_entry = f"[{timestamp}] {message}\n"
         
         def update_log():
-            if hasattr(self, 'log_text'):
-                self.log_text.insert(tk.END, log_entry)
-                self.log_text.see(tk.END)
+            self.log_text.insert(tk.END, log_entry)
+            self.log_text.see(tk.END)
         
         if threading.current_thread() == threading.main_thread():
             update_log()
@@ -1597,8 +1449,7 @@ class SubscriptionGUI:
             self.root.after(0, update_log)
         
         # 파일 로그에도 기록
-        if hasattr(self, 'logger'):
-            self.logger.info(message)
+        self.logger.info(message)
     
     def clear_log(self):
         """로그 지우기"""

@@ -1,352 +1,427 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-청약 시스템 + 네이버 API 통합 모듈
-파일명: api/subscription_with_naver.py
+네이버 API Rate Limiting 해결 코드
+파일명: api/subscription_with_naver.py (수정 버전)
 """
 
 import requests
+import time
 import logging
-from typing import Dict, List, Any, Optional
+from typing import List, Dict, Optional
 from datetime import datetime
-import re
+import random
 
 class SubscriptionNaverIntegration:
-    """청약 시스템과 네이버 API 통합 클래스"""
+    """청약 분양정보와 네이버 API 통합 클래스 (Rate Limiting 해결)"""
     
-    def __init__(self, naver_client_id: str, naver_client_secret: str):
+    def __init__(self, client_id: str, client_secret: str):
         """
         초기화
         Args:
-            naver_client_id (str): 네이버 API Client ID
-            naver_client_secret (str): 네이버 API Client Secret
+            client_id (str): 네이버 API 클라이언트 ID
+            client_secret (str): 네이버 API 클라이언트 시크릿
         """
-        self.client_id = naver_client_id
-        self.client_secret = naver_client_secret
-        self.headers = {
-            'X-Naver-Client-Id': self.client_id,
-            'X-Naver-Client-Secret': self.client_secret
-        }
+        self.client_id = client_id
+        self.client_secret = client_secret
         self.logger = logging.getLogger(__name__)
+        
+        # Rate Limiting 설정
+        self.min_delay = 0.5  # 최소 딜레이 (초)
+        self.max_delay = 2.0  # 최대 딜레이 (초)
+        self.max_retries = 3  # 최대 재시도 횟수
+        self.backoff_factor = 2  # 백오프 배수
+        
+        # API 호출 간격 제어
+        self.last_call_time = 0
+        
+        # 네이버 API 헤더
+        self.headers = {
+            "X-Naver-Client-Id": self.client_id,
+            "X-Naver-Client-Secret": self.client_secret,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
     
-    def search_related_news(self, apartment_name: str, location: str = "") -> List[Dict[str, Any]]:
+    def _wait_for_rate_limit(self):
+        """API 호출 간격 제어"""
+        current_time = time.time()
+        time_since_last_call = current_time - self.last_call_time
+        
+        if time_since_last_call < self.min_delay:
+            sleep_time = self.min_delay - time_since_last_call
+            # 랜덤 지터 추가 (0.1~0.3초)
+            jitter = random.uniform(0.1, 0.3)
+            total_sleep = sleep_time + jitter
+            
+            self.logger.debug(f"Rate limiting: {total_sleep:.2f}초 대기")
+            time.sleep(total_sleep)
+        
+        self.last_call_time = time.time()
+    
+    def _make_api_request(self, url: str, params: Dict) -> Optional[Dict]:
         """
-        분양정보 관련 뉴스 검색
+        안전한 API 요청 (재시도 로직 포함)
         Args:
-            apartment_name (str): 아파트명
-            location (str): 지역명
+            url (str): API URL
+            params (Dict): 요청 파라미터
         Returns:
-            List[Dict]: 관련 뉴스 목록
+            Optional[Dict]: API 응답 또는 None
+        """
+        for attempt in range(self.max_retries):
+            try:
+                # Rate Limiting 적용
+                self._wait_for_rate_limit()
+                
+                self.logger.debug(f"API 요청 시도 {attempt + 1}/{self.max_retries}: {url}")
+                
+                response = requests.get(url, headers=self.headers, params=params, timeout=10)
+                
+                # 성공적인 응답
+                if response.status_code == 200:
+                    self.logger.debug(f"API 요청 성공: {url}")
+                    return response.json()
+                
+                # Rate Limiting 에러 처리
+                elif response.status_code == 429:
+                    retry_delay = self.min_delay * (self.backoff_factor ** attempt)
+                    # 최대 30초까지만 대기
+                    retry_delay = min(retry_delay, 30.0)
+                    
+                    self.logger.warning(f"Rate limit 도달. {retry_delay:.1f}초 후 재시도... (시도 {attempt + 1}/{self.max_retries})")
+                    time.sleep(retry_delay)
+                    continue
+                
+                # 기타 HTTP 에러
+                else:
+                    self.logger.error(f"HTTP 오류 {response.status_code}: {url}")
+                    if attempt == self.max_retries - 1:
+                        return None
+                    
+                    # 짧은 딜레이 후 재시도
+                    time.sleep(1.0)
+                    continue
+                    
+            except requests.exceptions.Timeout:
+                self.logger.warning(f"API 요청 타임아웃: {url} (시도 {attempt + 1}/{self.max_retries})")
+                if attempt < self.max_retries - 1:
+                    time.sleep(2.0)
+                    continue
+                    
+            except requests.exceptions.RequestException as e:
+                self.logger.error(f"API 요청 오류: {e} (시도 {attempt + 1}/{self.max_retries})")
+                if attempt < self.max_retries - 1:
+                    time.sleep(1.0)
+                    continue
+        
+        self.logger.error(f"API 요청 최종 실패: {url}")
+        return None
+    
+    def search_naver_news(self, query: str, display: int = 5) -> List[Dict]:
+        """
+        네이버 뉴스 검색 (안전한 버전)
+        Args:
+            query (str): 검색 쿼리
+            display (int): 결과 개수
+        Returns:
+            List[Dict]: 뉴스 검색 결과
         """
         try:
-            # 검색 키워드 조합
-            search_queries = []
+            url = "https://openapi.naver.com/v1/search/news"
+            params = {
+                "query": query,
+                "display": display,
+                "start": 1,
+                "sort": "date"
+            }
             
-            if apartment_name:
-                search_queries.append(f'"{apartment_name}" 분양')
-                search_queries.append(f'"{apartment_name}" 청약')
+            result = self._make_api_request(url, params)
             
-            if location:
-                search_queries.append(f'"{location}" 분양')
-                search_queries.append(f'"{location}" 청약')
-                search_queries.append(f'"{location}" 아파트')
+            if result and 'items' in result:
+                self.logger.info(f"뉴스 검색 성공: '{query}' - {len(result['items'])}건")
+                return result['items']
+            else:
+                self.logger.warning(f"뉴스 검색 결과 없음: '{query}'")
+                return []
+                
+        except Exception as e:
+            self.logger.error(f"뉴스 검색 예외 오류: {e}")
+            return []
+    
+    def search_naver_blog(self, query: str, display: int = 5) -> List[Dict]:
+        """
+        네이버 블로그 검색 (안전한 버전)
+        Args:
+            query (str): 검색 쿼리
+            display (int): 결과 개수
+        Returns:
+            List[Dict]: 블로그 검색 결과
+        """
+        try:
+            url = "https://openapi.naver.com/v1/search/blog"
+            params = {
+                "query": query,
+                "display": display,
+                "start": 1,
+                "sort": "date"
+            }
+            
+            result = self._make_api_request(url, params)
+            
+            if result and 'items' in result:
+                self.logger.info(f"블로그 검색 성공: '{query}' - {len(result['items'])}건")
+                return result['items']
+            else:
+                self.logger.warning(f"블로그 검색 결과 없음: '{query}'")
+                return []
+                
+        except Exception as e:
+            self.logger.error(f"블로그 검색 예외 오류: {e}")
+            return []
+    
+    def search_related_news(self, keyword: str = "", region: str = "") -> List[Dict]:
+        """
+        관련 뉴스 검색 (고정 키워드 사용)
+        Args:
+            keyword (str): 검색 키워드 (사용하지 않음, 호환성 유지용)
+            region (str): 지역명 (사용하지 않음, 호환성 유지용)
+        Returns:
+            List[Dict]: 뉴스 검색 결과
+        """
+        try:
+            # 고정 검색 키워드
+            search_keywords = ['부동산', '분양', '청약']
+            
+            self.logger.info("관련 뉴스 검색 시작: 부동산, 분양, 청약")
             
             all_news = []
             
-            for query in search_queries:
-                news_results = self._search_naver_news(query, display=10)
+            for search_keyword in search_keywords:
+                self.logger.info(f"뉴스 검색 진행: '{search_keyword}'")
                 
-                for item in news_results.get('items', []):
-                    # 중복 제거를 위한 URL 체크
-                    if not any(existing['link'] == item['link'] for existing in all_news):
-                        processed_item = self._process_news_item(item)
-                        if processed_item:
-                            all_news.append(processed_item)
+                # 각 키워드별 뉴스 검색
+                news_results = self.search_naver_news(search_keyword, display=5)
+                all_news.extend(news_results)
+                
+                # API 호출 간격 추가 대기
+                time.sleep(random.uniform(1.0, 1.5))
             
-            # 최신순 정렬
-            all_news.sort(key=lambda x: x.get('pubDate', ''), reverse=True)
+            # 중복 제거 (링크 기준)
+            unique_news = []
+            seen_links = set()
             
-            self.logger.info(f"관련 뉴스 검색 완료: {apartment_name} {location}, {len(all_news)}건")
-            return all_news[:20]  # 상위 20개만 반환
+            for news in all_news:
+                link = news.get('link', '')
+                if link and link not in seen_links:
+                    seen_links.add(link)
+                    unique_news.append(news)
+            
+            self.logger.info(f"관련 뉴스 검색 완료: 총 {len(unique_news)}건 (중복 제거 후)")
+            return unique_news[:15]  # 최대 15개까지만 반환
             
         except Exception as e:
             self.logger.error(f"관련 뉴스 검색 오류: {e}")
             return []
     
-    def search_market_trends(self, location: str) -> Dict[str, Any]:
+    def search_market_trends(self, region: str = "") -> Dict:
         """
-        지역별 부동산 시장 트렌드 검색
+        시장 동향 분석 (고정 키워드 사용)
         Args:
-            location (str): 지역명
+            region (str): 지역명 (사용하지 않음, 호환성 유지용)
         Returns:
-            Dict: 시장 트렌드 정보
+            Dict: 시장 동향 분석 결과
         """
         try:
-            trend_keywords = [
-                f'"{location}" 아파트 시세',
-                f'"{location}" 부동산 동향',
-                f'"{location}" 아파트 가격',
-                f'"{location}" 청약 경쟁률',
-                f'"{location}" 분양권 시세'
-            ]
+            self.logger.info("시장 동향 분석 시작: 부동산, 분양, 청약")
             
-            trend_data = {
-                'location': location,
+            trends_data = {
+                'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'search_keywords': ['부동산', '분양', '청약'],
                 'news_count': 0,
                 'blog_count': 0,
-                'latest_news': [],
                 'market_keywords': [],
-                'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'latest_news': []
             }
             
-            for keyword in trend_keywords:
-                # 뉴스 검색
-                news_results = self._search_naver_news(keyword, display=5)
-                trend_data['news_count'] += len(news_results.get('items', []))
+            # 고정 검색 키워드
+            search_keywords = ['부동산', '분양', '청약']
+            
+            all_news = []
+            all_blogs = []
+            
+            for keyword in search_keywords:
+                self.logger.info(f"시장 동향 검색: '{keyword}'")
                 
-                # 최신 뉴스 추가
-                for item in news_results.get('items', [])[:2]:
-                    processed_item = self._process_news_item(item)
-                    if processed_item and processed_item not in trend_data['latest_news']:
-                        trend_data['latest_news'].append(processed_item)
+                # 뉴스 검색
+                news_results = self.search_naver_news(keyword, display=3)
+                all_news.extend(news_results)
+                
+                # API 호출 간격 대기
+                time.sleep(random.uniform(1.0, 1.5))
                 
                 # 블로그 검색
-                blog_results = self._search_naver_blog(keyword, display=5)
-                trend_data['blog_count'] += len(blog_results.get('items', []))
-            
-            # 키워드 추출
-            trend_data['market_keywords'] = self._extract_market_keywords(trend_data['latest_news'])
-            
-            return trend_data
-            
-        except Exception as e:
-            self.logger.error(f"시장 트렌드 검색 오류: {e}")
-            return {'location': location, 'error': str(e)}
-    
-    def analyze_competition_rate(self, apartment_list: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        청약 경쟁률 관련 정보 분석
-        Args:
-            apartment_list (List[Dict]): 아파트 목록
-        Returns:
-            Dict: 경쟁률 분석 결과
-        """
-        try:
-            competition_analysis = {
-                'total_analyzed': len(apartment_list),
-                'high_competition': [],
-                'market_insights': [],
-                'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-            
-            for apt in apartment_list[:10]:  # 상위 10개만 분석
-                apt_name = apt.get('주택명', '')
-                location = apt.get('공급지역', '')
+                blog_results = self.search_naver_blog(keyword, display=3)
+                all_blogs.extend(blog_results)
                 
-                if apt_name:
-                    # 경쟁률 관련 뉴스 검색
-                    competition_query = f'"{apt_name}" 경쟁률'
-                    news_results = self._search_naver_news(competition_query, display=5)
-                    
-                    competition_info = {
-                        'apartment_name': apt_name,
-                        'location': location,
-                        'news_count': len(news_results.get('items', [])),
-                        'related_news': []
-                    }
-                    
-                    for item in news_results.get('items', [])[:3]:
-                        processed_item = self._process_news_item(item)
-                        if processed_item:
-                            competition_info['related_news'].append(processed_item)
-                    
-                    if competition_info['news_count'] > 0:
-                        competition_analysis['high_competition'].append(competition_info)
+                # API 호출 간격 대기
+                time.sleep(random.uniform(1.0, 1.5))
             
-            return competition_analysis
+            # 중복 제거
+            unique_news = []
+            seen_links = set()
+            
+            for news in all_news:
+                link = news.get('link', '')
+                if link and link not in seen_links:
+                    seen_links.add(link)
+                    unique_news.append(news)
+            
+            unique_blogs = []
+            seen_blog_links = set()
+            
+            for blog in all_blogs:
+                link = blog.get('link', '')
+                if link and link not in seen_blog_links:
+                    seen_blog_links.add(link)
+                    unique_blogs.append(blog)
+            
+            # 결과 취합
+            trends_data['news_count'] = len(unique_news)
+            trends_data['blog_count'] = len(unique_blogs)
+            trends_data['latest_news'] = unique_news[:5]  # 최신 5개만
+            
+            # 키워드 분석
+            keywords = set()
+            all_content = unique_news + unique_blogs
+            
+            for item in all_content:
+                title = item.get('title', '').replace('<b>', '').replace('</b>', '')
+                description = item.get('description', '').replace('<b>', '').replace('</b>', '')
+                
+                # 부동산 관련 키워드 추출
+                content = f"{title} {description}".lower()
+                
+                keyword_candidates = [
+                    '분양', '청약', '부동산', '아파트', '시세', '가격',
+                    '투자', '전세', '매매', '경쟁률', '당첨', '공급',
+                    '입주', '계약', '분양권', '신축', '재건축', '재개발'
+                ]
+                
+                for candidate in keyword_candidates:
+                    if candidate in content:
+                        keywords.add(candidate)
+            
+            trends_data['market_keywords'] = list(keywords)[:10]  # 최대 10개
+            
+            self.logger.info(f"시장 동향 분석 완료: 뉴스 {trends_data['news_count']}건, 블로그 {trends_data['blog_count']}건")
+            return trends_data
             
         except Exception as e:
-            self.logger.error(f"경쟁률 분석 오류: {e}")
-            return {'error': str(e)}
+            self.logger.error(f"시장 동향 분석 오류: {e}")
+            return {
+                'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'search_keywords': ['부동산', '분양', '청약'],
+                'news_count': 0,
+                'blog_count': 0,
+                'market_keywords': [],
+                'latest_news': [],
+                'error': str(e)
+            }
     
-    def get_comprehensive_market_report(self, subscription_data: Dict[str, Any]) -> Dict[str, Any]:
+    def get_comprehensive_market_report(self, subscription_data: Dict) -> Dict:
         """
-        종합 시장 분석 보고서 생성
+        종합 시장 분석 보고서 (고정 키워드 사용)
         Args:
-            subscription_data (Dict): 청약 분양정보 데이터
+            subscription_data (Dict): 분양정보 데이터
         Returns:
             Dict: 종합 분석 보고서
         """
         try:
+            self.logger.info("종합 시장 분석 보고서 생성 시작")
+            
+            # 고정 검색 키워드
+            search_keywords = ['부동산', '분양', '청약']
+            
             report = {
                 'report_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'search_keywords': search_keywords,
                 'summary': {
-                    'total_subscriptions': 0,
-                    'analyzed_regions': set(),
+                    'total_subscriptions': sum(len(items) for items in subscription_data.values() if isinstance(items, list)),
+                    'analyzed_keywords': search_keywords,
                     'hot_keywords': []
                 },
-                'regional_analysis': {},
-                'market_trends': [],
-                'investment_insights': []
+                'keyword_analysis': {}
             }
             
-            # 전체 분양정보 통계
-            for category, items in subscription_data.items():
-                report['summary']['total_subscriptions'] += len(items)
+            # 키워드별 분석
+            all_keywords = set()
+            
+            for keyword in search_keywords:
+                self.logger.info(f"키워드 분석 진행: {keyword}")
                 
-                for item in items:
-                    location = item.get('공급지역', '')
-                    if location:
-                        report['summary']['analyzed_regions'].add(location)
+                # 뉴스 검색
+                news_results = self.search_naver_news(keyword, display=3)
+                
+                # API 호출 간격 대기
+                time.sleep(random.uniform(1.5, 2.0))
+                
+                # 블로그 검색
+                blog_results = self.search_naver_blog(keyword, display=2)
+                
+                # API 호출 간격 대기  
+                time.sleep(random.uniform(1.5, 2.0))
+                
+                # 키워드별 결과 저장
+                report['keyword_analysis'][keyword] = {
+                    'news_count': len(news_results),
+                    'blog_count': len(blog_results),
+                    'latest_news': news_results[:2],
+                    'latest_blogs': blog_results[:1]
+                }
+                
+                # 키워드 수집
+                for item in news_results + blog_results:
+                    title = item.get('title', '').replace('<b>', '').replace('</b>', '')
+                    description = item.get('description', '').replace('<b>', '').replace('</b>', '')
+                    
+                    content = f"{title} {description}".lower()
+                    
+                    # 부동산 관련 키워드 추출
+                    keyword_candidates = [
+                        '분양', '청약', '부동산', '아파트', '시세', '가격',
+                        '투자', '전세', '매매', '경쟁률', '당첨', '공급',
+                        '입주', '계약', '분양권', '신축', '재건축', '재개발',
+                        '대출', '금리', '정책', '규제', '완화'
+                    ]
+                    
+                    for candidate in keyword_candidates:
+                        if candidate in content:
+                            all_keywords.add(candidate)
             
-            # 지역별 분석
-            for region in list(report['summary']['analyzed_regions'])[:5]:  # 상위 5개 지역
-                regional_data = self.search_market_trends(region)
-                report['regional_analysis'][region] = regional_data
+            # 핫 키워드 설정
+            report['summary']['hot_keywords'] = list(all_keywords)[:8]  # 상위 8개
             
-            # 핫 키워드 추출
-            all_keywords = []
-            for region_data in report['regional_analysis'].values():
-                all_keywords.extend(region_data.get('market_keywords', []))
+            # 전체 통계
+            total_news = sum(data['news_count'] for data in report['keyword_analysis'].values())
+            total_blogs = sum(data['blog_count'] for data in report['keyword_analysis'].values())
             
-            # 키워드 빈도 계산
-            keyword_count = {}
-            for keyword in all_keywords:
-                keyword_count[keyword] = keyword_count.get(keyword, 0) + 1
+            report['summary']['total_news'] = total_news
+            report['summary']['total_blogs'] = total_blogs
             
-            # 상위 키워드 정렬
-            sorted_keywords = sorted(keyword_count.items(), key=lambda x: x[1], reverse=True)
-            report['summary']['hot_keywords'] = [k[0] for k in sorted_keywords[:10]]
-            
+            self.logger.info(f"종합 시장 분석 보고서 생성 완료: 뉴스 {total_news}건, 블로그 {total_blogs}건")
             return report
             
         except Exception as e:
-            self.logger.error(f"종합 보고서 생성 오류: {e}")
-            return {'error': str(e)}
-    
-    def _search_naver_news(self, query: str, display: int = 10) -> Dict[str, Any]:
-        """네이버 뉴스 검색 (내부 메서드)"""
-        try:
-            url = "https://openapi.naver.com/v1/search/news"
-            params = {
-                'query': query,
-                'display': display,
-                'start': 1,
-                'sort': 'date'  # 최신순
-            }
-            
-            response = requests.get(url, headers=self.headers, params=params)
-            response.raise_for_status()
-            
-            return response.json()
-            
-        except Exception as e:
-            self.logger.error(f"네이버 뉴스 검색 오류: {e}")
-            return {'items': [], 'total': 0}
-    
-    def _search_naver_blog(self, query: str, display: int = 10) -> Dict[str, Any]:
-        """네이버 블로그 검색 (내부 메서드)"""
-        try:
-            url = "https://openapi.naver.com/v1/search/blog"
-            params = {
-                'query': query,
-                'display': display,
-                'start': 1,
-                'sort': 'date'  # 최신순
-            }
-            
-            response = requests.get(url, headers=self.headers, params=params)
-            response.raise_for_status()
-            
-            return response.json()
-            
-        except Exception as e:
-            self.logger.error(f"네이버 블로그 검색 오류: {e}")
-            return {'items': [], 'total': 0}
-    
-    def _process_news_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """뉴스 항목 처리 (HTML 태그 제거 등)"""
-        try:
-            # HTML 태그 제거
-            title = re.sub('<[^<]+?>', '', item.get('title', ''))
-            description = re.sub('<[^<]+?>', '', item.get('description', ''))
-            
-            # 특수문자 정리
-            title = re.sub('&quot;', '"', title)
-            title = re.sub('&amp;', '&', title)
-            description = re.sub('&quot;', '"', description)
-            description = re.sub('&amp;', '&', description)
-            
+            self.logger.error(f"종합 분석 보고서 생성 오류: {e}")
             return {
-                'title': title.strip(),
-                'description': description.strip(),
-                'link': item.get('link', ''),
-                'pubDate': item.get('pubDate', ''),
-                'source': '네이버뉴스'
+                'report_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'search_keywords': ['부동산', '분양', '청약'],
+                'summary': {
+                    'total_subscriptions': 0,
+                    'analyzed_keywords': [],
+                    'hot_keywords': [],
+                    'total_news': 0,
+                    'total_blogs': 0
+                },
+                'keyword_analysis': {},
+                'error': str(e)
             }
-            
-        except Exception as e:
-            self.logger.error(f"뉴스 항목 처리 오류: {e}")
-            return None
-    
-    def _extract_market_keywords(self, news_list: List[Dict[str, Any]]) -> List[str]:
-        """뉴스에서 시장 관련 키워드 추출"""
-        try:
-            keywords = []
-            market_terms = ['상승', '하락', '급등', '급락', '투자', '수익', '전망', '예측', '시세', '가격']
-            
-            for news in news_list:
-                title = news.get('title', '')
-                description = news.get('description', '')
-                
-                for term in market_terms:
-                    if term in title or term in description:
-                        keywords.append(term)
-            
-            # 중복 제거 및 빈도순 정렬
-            unique_keywords = list(set(keywords))
-            return unique_keywords[:10]
-            
-        except Exception as e:
-            self.logger.error(f"키워드 추출 오류: {e}")
-            return []
-
-# 사용 예제
-def example_integration():
-    """청약 시스템과 네이버 API 통합 예제"""
-    
-    # 네이버 API 키 설정
-    NAVER_CLIENT_ID = ""
-    NAVER_CLIENT_SECRET = ""
-    
-    # 통합 클래스 초기화
-    integration = SubscriptionNaverIntegration(NAVER_CLIENT_ID, NAVER_CLIENT_SECRET)
-    
-    # 예시 청약 데이터
-    sample_apartment = {
-        '주택명': '래미안 강남포레스트',
-        '공급지역': '서울 강남구',
-        '모집공고일': '2025-06-01'
-    }
-    
-    print("=== 청약 시스템 + 네이버 API 통합 테스트 ===")
-    
-    # 1. 관련 뉴스 검색
-    print("\n1. 관련 뉴스 검색:")
-    related_news = integration.search_related_news(
-        sample_apartment['주택명'], 
-        sample_apartment['공급지역']
-    )
-    
-    for news in related_news[:3]:
-        print(f"- {news.get('title', 'N/A')}")
-    
-    # 2. 시장 트렌드 분석
-    print("\n2. 시장 트렌드 분석:")
-    market_trends = integration.search_market_trends("강남구")
-    print(f"뉴스 건수: {market_trends.get('news_count', 0)}")
-    print(f"블로그 건수: {market_trends.get('blog_count', 0)}")
-    print(f"주요 키워드: {', '.join(market_trends.get('market_keywords', [])[:5])}")
-
-if __name__ == "__main__":
-    example_integration()

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-메인 GUI 창 모듈 (스케줄러 및 상세 로깅 추가)
+메인 GUI 창 모듈 (날짜 필터링 기능 추가)
 파일명: gui/main_window.py
 작성자: 청약 자동화 시스템
-설명: tkinter를 사용한 메인 사용자 인터페이스 (날짜 필터링 및 스케줄러 포함)
+설명: tkinter를 사용한 메인 사용자 인터페이스 (날짜 필터링 포함)
 """
 
 import tkinter as tk
@@ -90,34 +90,6 @@ except ImportError:
             return True
 
 try:
-    from utils.scheduler import SystemScheduler
-except ImportError:
-    # 스케줄러 모듈이 없으면 임시 클래스
-    class SystemScheduler:
-        def __init__(self, target_function, log_callback=None):
-            self.target_function = target_function
-            self.log_callback = log_callback
-            self.is_running = False
-            self.is_enabled = False
-        
-        def set_schedule(self, enabled, target_time_str):
-            self.is_enabled = enabled
-            if self.log_callback:
-                self.log_callback(f"❌ 스케줄러 모듈을 찾을 수 없습니다. utils/scheduler.py를 생성하세요.")
-        
-        def start_scheduler(self):
-            pass
-        
-        def stop_scheduler(self):
-            pass
-        
-        def get_status(self):
-            return {'is_running': False, 'is_enabled': False}
-        
-        def get_next_execution_info(self):
-            return "스케줄러 모듈 없음"
-
-try:
     from api.public_data import PublicDataAPI
 except ImportError:
     class PublicDataAPI:
@@ -180,9 +152,6 @@ class SubscriptionGUI:
         # 로깅 설정
         self.setup_logging()
         
-        # 스케줄러 초기화
-        self.setup_scheduler()
-        
         # GUI 컴포넌트 초기화
         self.create_widgets()
         
@@ -191,109 +160,6 @@ class SubscriptionGUI:
         
         # 진행상태 변수
         self.is_running = False
-        
-        # 상태 업데이트 스레드 시작
-        self.start_status_update_thread()
-    
-    def setup_scheduler(self):
-        """스케줄러 설정"""
-        try:
-            self.scheduler = SystemScheduler(
-                target_function=self.scheduled_system_run,
-                log_callback=self.log_message
-            )
-            self.log_message("📅 스케줄러 초기화 완료")
-        except Exception as e:
-            self.log_message(f"❌ 스케줄러 초기화 오류: {e}")
-            self.scheduler = None
-    
-    def start_status_update_thread(self):
-        """상태 업데이트 스레드 시작"""
-        def status_update_loop():
-            while True:
-                try:
-                    # 스케줄러 상태 업데이트 (10초마다)
-                    if self.scheduler:
-                        self.update_scheduler_status()
-                    
-                    # 10초 대기
-                    import time
-                    time.sleep(10)
-                    
-                except Exception as e:
-                    self.log_message(f"❌ 상태 업데이트 오류: {e}")
-                    import time
-                    time.sleep(30)
-        
-        threading.Thread(target=status_update_loop, daemon=True).start()
-    
-    def update_scheduler_status(self):
-        """스케줄러 상태 업데이트"""
-        try:
-            if hasattr(self, 'scheduler_status_label') and self.scheduler:
-                status = self.scheduler.get_status()
-                next_info = self.scheduler.get_next_execution_info()
-                
-                # UI 업데이트는 메인 스레드에서
-                self.root.after(0, lambda: self.scheduler_status_label.config(text=f"📅 {next_info}"))
-                
-        except Exception as e:
-            self.logger.error(f"스케줄러 상태 업데이트 오류: {e}")
-    
-    def scheduled_system_run(self):
-        """스케줄러에 의한 시스템 실행"""
-        try:
-            self.log_message("🔔 스케줄된 시간에 따른 자동 실행 시작")
-            
-            # 메인 스레드에서 실행되도록 콜백
-            self.root.after(0, self._execute_scheduled_run)
-            
-        except Exception as e:
-            self.log_message(f"❌ 스케줄 실행 오류: {e}")
-    
-    def _execute_scheduled_run(self):
-        """스케줄 실행 (메인 스레드에서)"""
-        try:
-            # 설정 검증
-            if not self._validate_settings_for_scheduled_run():
-                return
-            
-            # 기존 실행 중인지 체크
-            if self.is_running:
-                self.log_message("⚠️ 시스템이 이미 실행 중이므로 스케줄 실행을 건너뜁니다")
-                return
-            
-            self.log_message("🚀 스케줄된 자동 실행 진행")
-            
-            # 별도 스레드에서 실행
-            threading.Thread(target=self._run_system_thread, args=(True,), daemon=True).start()
-            
-        except Exception as e:
-            self.log_message(f"❌ 스케줄 실행 오류: {e}")
-    
-    def _validate_settings_for_scheduled_run(self) -> bool:
-        """스케줄 실행을 위한 설정 검증"""
-        try:
-            recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
-            
-            if not self.api_key_var.get().strip():
-                self.log_message("❌ 스케줄 실행 실패: API 서비스키가 없습니다")
-                return False
-            
-            if not self.sender_email_var.get().strip() or not self.app_password_var.get().strip():
-                self.log_message("❌ 스케줄 실행 실패: 이메일 설정이 없습니다")
-                return False
-            
-            if not recipients:
-                self.log_message("❌ 스케줄 실행 실패: 수신자 이메일이 없습니다")
-                return False
-            
-            self.log_message("✅ 스케줄 실행 설정 검증 완료")
-            return True
-            
-        except Exception as e:
-            self.log_message(f"❌ 설정 검증 오류: {e}")
-            return False
     
     def setup_window(self):
         """메인 창 설정"""
@@ -337,18 +203,6 @@ class SubscriptionGUI:
         
         self.logger = logging.getLogger(__name__)
         self.logger.info("청약 분양정보 자동화 시스템 시작")
-    
-    def setup_scheduler(self):
-        """스케줄러 설정"""
-        try:
-            self.scheduler = SystemScheduler(
-                target_function=self.scheduled_system_run,
-                log_callback=self.log_message
-            )
-            self.log_message("📅 스케줄러 초기화 완료")
-        except Exception as e:
-            self.log_message(f"❌ 스케줄러 초기화 오류: {e}")
-            self.scheduler = None
     
     def safe_load_settings(self):
         """설정 안전하게 로드 (URL 인코딩 문제 해결)"""
@@ -413,129 +267,6 @@ class SubscriptionGUI:
             
         except Exception as e:
             self.log_message(f"❌ UI 로드 오류: {e}")
-    
-    def scheduled_system_run(self):
-        """스케줄러에 의한 시스템 실행"""
-        try:
-            self.log_message("🔔 스케줄된 시간에 따른 자동 실행 시작")
-            
-            # 메인 스레드에서 실행되도록 콜백
-            self.root.after(0, self._execute_scheduled_run)
-            
-        except Exception as e:
-            self.log_message(f"❌ 스케줄 실행 오류: {e}")
-    
-    def _execute_scheduled_run(self):
-        """스케줄 실행 (메인 스레드에서)"""
-        try:
-            # 설정 검증
-            if not self._validate_settings_for_scheduled_run():
-                return
-            
-            # 기존 실행 중인지 체크
-            if self.is_running:
-                self.log_message("⚠️ 시스템이 이미 실행 중이므로 스케줄 실행을 건너뜁니다")
-                return
-            
-            self.log_message("🚀 스케줄된 자동 실행 진행")
-            
-            # 별도 스레드에서 실행
-            threading.Thread(target=self._run_system_thread, args=(True,), daemon=True).start()
-            
-        except Exception as e:
-            self.log_message(f"❌ 스케줄 실행 오류: {e}")
-    
-    def _validate_settings_for_scheduled_run(self) -> bool:
-        """스케줄 실행을 위한 설정 검증"""
-        try:
-            recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
-            
-            if not self.api_key_var.get().strip():
-                self.log_message("❌ 스케줄 실행 실패: API 서비스키가 없습니다")
-                return False
-            
-            if not self.sender_email_var.get().strip() or not self.app_password_var.get().strip():
-                self.log_message("❌ 스케줄 실행 실패: 이메일 설정이 없습니다")
-                return False
-            
-            if not recipients:
-                self.log_message("❌ 스케줄 실행 실패: 수신자 이메일이 없습니다")
-                return False
-            
-            self.log_message("✅ 스케줄 실행 설정 검증 완료")
-            return True
-            
-        except Exception as e:
-            self.log_message(f"❌ 설정 검증 오류: {e}")
-            return False
-    
-    def start_status_update_thread(self):
-        """상태 업데이트 스레드 시작"""
-        def status_update_loop():
-            while True:
-                try:
-                    # 스케줄러 상태 업데이트 (10초마다)
-                    if self.scheduler:
-                        self.update_scheduler_status()
-                    
-                    # 10초 대기
-                    import time
-                    time.sleep(10)
-                    
-                except Exception as e:
-                    self.log_message(f"❌ 상태 업데이트 오류: {e}")
-                    import time
-                    time.sleep(30)
-        
-        threading.Thread(target=status_update_loop, daemon=True).start()
-    
-    def update_scheduler_status(self):
-        """스케줄러 상태 업데이트"""
-        try:
-            if hasattr(self, 'scheduler_status_label') and self.scheduler:
-                status = self.scheduler.get_status()
-                next_info = self.scheduler.get_next_execution_info()
-                
-                # UI 업데이트는 메인 스레드에서
-                self.root.after(0, lambda: self.scheduler_status_label.config(text=f"📅 {next_info}"))
-                
-        except Exception as e:
-            self.logger.error(f"스케줄러 상태 업데이트 오류: {e}")
-    
-    def _update_scheduler_settings(self):
-        """스케줄러 설정 업데이트"""
-        try:
-            if not self.scheduler:
-                return
-            
-            is_enabled = self.schedule_enabled_var.get()
-            target_time = self.schedule_time_var.get().strip()
-            
-            # 상세 로그
-            self.log_message(f"📅 스케줄러 설정 업데이트: {'활성화' if is_enabled else '비활성화'}, 시간: {target_time}")
-            
-            if is_enabled and target_time:
-                # 시간 형식 검증
-                try:
-                    hour, minute = map(int, target_time.split(':'))
-                    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-                        raise ValueError("잘못된 시간 범위")
-                    
-                    self.scheduler.set_schedule(True, target_time)
-                    self.log_message(f"✅ 스케줄 설정 완료: 매일 {target_time}에 자동 실행")
-                    
-                except ValueError as e:
-                    self.log_message(f"❌ 시간 형식 오류: {target_time} - HH:MM 형식으로 입력하세요")
-                    # 체크박스 비활성화
-                    self.schedule_enabled_var.set(False)
-                    self.schedule_time_entry.config(state='disabled')
-                    return
-            else:
-                self.scheduler.set_schedule(False, target_time)
-                self.log_message("📅 스케줄 실행 중지")
-                
-        except Exception as e:
-            self.log_message(f"❌ 스케줄러 설정 오류: {e}")
     
     def create_widgets(self):
         """GUI 위젯 생성"""
@@ -760,7 +491,7 @@ class SubscriptionGUI:
         
         # 스케줄 실행 체크박스
         self.schedule_enabled_var = tk.BooleanVar()
-        self.schedule_enabled_check = ttk.Checkbutton(parent, text="📅 스케줄 실행", 
+        self.schedule_enabled_check = ttk.Checkbutton(parent, text="스케줄 실행", 
                                                      variable=self.schedule_enabled_var,
                                                      command=self.toggle_schedule_settings)
         self.schedule_enabled_check.grid(row=start_row+2, column=0, sticky=tk.W, padx=(20, 5))
@@ -772,199 +503,7 @@ class SubscriptionGUI:
         self.schedule_time_entry.grid(row=start_row+2, column=2, sticky=tk.W, padx=5)
         self.schedule_time_entry.config(state='disabled')
         
-        # 스케줄 시간 변경 시 스케줄러 업데이트
-        self.schedule_time_var.trace('w', lambda *args: self._update_scheduler_settings())
-        
         ttk.Label(parent, text="매일").grid(row=start_row+2, column=2, sticky=tk.W, padx=(80, 5))
-        
-        # 스케줄러 상태 표시
-        self.scheduler_status_label = ttk.Label(parent, text="📅 스케줄 비활성화", 
-                                              font=('맑은 고딕', 9), foreground='gray')
-        self.scheduler_status_label.grid(row=start_row+3, column=0, columnspan=3, sticky=tk.W, padx=(20, 5), pady=(5, 0))
-        
-        # 스케줄 테스트 버튼
-        self.test_schedule_btn = ttk.Button(parent, text="🧪 스케줄 테스트", command=self.test_scheduled_execution)
-        self.test_schedule_btn.grid(row=start_row+3, column=2, sticky=tk.E, padx=5)
-    
-    def test_scheduled_execution(self):
-        """스케줄 실행 테스트"""
-        try:
-            if not self.scheduler:
-                messagebox.showerror("오류", "스케줄러가 초기화되지 않았습니다.")
-                return
-            
-            if not self.schedule_enabled_var.get():
-                messagebox.showwarning("스케줄 비활성화", "스케줄이 비활성화되어 있습니다. 먼저 스케줄을 활성화하세요.")
-                return
-            
-            if self.is_running:
-                messagebox.showwarning("실행 중", "시스템이 이미 실행 중입니다.")
-                return
-            
-            # 설정 검증
-            if not self._validate_settings_for_scheduled_run():
-                messagebox.showerror("설정 오류", "스케줄 실행에 필요한 설정이 완료되지 않았습니다.\n로그를 확인하세요.")
-                return
-            
-            # 테스트 실행 확인
-            if messagebox.askyesno("스케줄 테스트", "스케줄된 작업을 지금 테스트 실행하시겠습니까?"):
-                self.log_message("🧪 스케줄 실행 테스트 시작")
-                self.scheduler.force_execution()
-                
-        except Exception as e:
-            error_msg = f"스케줄 테스트 오류: {e}"
-            messagebox.showerror("오류", error_msg)
-            self.log_message(f"❌ {error_msg}")
-    
-    def _run_system_thread(self, is_scheduled: bool = False):
-        """시스템 실행 스레드 (스케줄/수동 구분)"""
-        try:
-            execution_type = "스케줄" if is_scheduled else "수동"
-            self.log_message(f"=== {execution_type} 청약 분양정보 수집 시작 ===")
-            
-            # 진행상태 업데이트
-            self.update_progress(10, "API 연결 중...")
-            
-            # API 초기화
-            api = PublicDataAPI(self.api_key_var.get().strip())
-            
-            self.update_progress(20, "분양정보 수집 중...")
-            
-            # 날짜 필터링 설정
-            date_filter_enabled = self.date_filter_enabled_var.get()
-            
-            # 분양정보 수집 (날짜 필터링 적용)
-            data = api.get_comprehensive_data(max_rows=50, date_filter=date_filter_enabled)
-            
-            self.update_progress(40, "엑셀 파일 생성 중...")
-            
-            # 엑셀 파일 생성
-            excel_handler = ExcelHandler()
-            excel_file = excel_handler.create_excel_file(data)
-            
-            # 네이버 API 분석 (옵션)
-            naver_results = None
-            if self.naver_enabled_var.get() and self.naver_client_id_var.get().strip() and self.naver_client_secret_var.get().strip():
-                try:
-                    self.update_progress(50, "네이버 API 시장 분석 중...")
-                    
-                    from api.subscription_with_naver import SubscriptionNaverIntegration
-                    
-                    integration = SubscriptionNaverIntegration(
-                        self.naver_client_id_var.get().strip(),
-                        self.naver_client_secret_var.get().strip()
-                    )
-                    
-                    naver_results = {}
-                    
-                    # 뉴스 검색
-                    self.update_progress(55, "관련 뉴스 검색 중...")
-                    news_results = integration.search_related_news("분양", "")
-                    if news_results:
-                        naver_results['news_search'] = news_results
-                    
-                    # 시장 동향 분석
-                    self.update_progress(60, "시장 동향 분석 중...")
-                    trends = integration.search_market_trends("")
-                    if trends:
-                        naver_results['market_trends'] = trends
-                    
-                    # 종합 분석 보고서
-                    self.update_progress(65, "종합 분석 보고서 생성 중...")
-                    report = integration.get_comprehensive_market_report(data)
-                    if report:
-                        naver_results['comprehensive_report'] = report
-                    
-                    self.root.after(0, lambda: self.log_message("✅ 네이버 API 분석 완료"))
-                    
-                except Exception as e:
-                    self.root.after(0, lambda: self.log_message(f"⚠️ 네이버 API 분석 오류: {e}"))
-                    naver_results = None
-            
-            self.update_progress(70, "이메일 전송 중...")
-            
-            # 이메일 전송 (네이버 API 결과 포함)
-            email_sender = EmailSender()
-            recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
-            
-            success, message = email_sender.send_subscription_email(
-                self.sender_email_var.get().strip(),
-                self.app_password_var.get().strip(),
-                recipients,
-                excel_file,
-                data,
-                naver_results  # 네이버 API 결과 추가
-            )
-            
-            self.update_progress(90, "카카오톡 알림 전송 중...")
-            
-            # 카카오톡 알림 (옵션)
-            if self.kakao_enabled_var.get() and self.kakao_api_key_var.get().strip():
-                kakao_api = create_kakao_api(self.kakao_api_key_var.get().strip(), True)
-                kakao_success, kakao_message = kakao_api.send_subscription_notification(data)
-                self.root.after(0, lambda: self.log_message(f"카카오톡 알림: {kakao_message}"))
-            
-            self.update_progress(100, "완료!")
-            
-            # 결과 표시
-            total_count = sum(len(items) for items in data.values())
-            filter_info = "\n📅 필터링: 진행중/예정 분양만" if date_filter_enabled else "\n📅 필터링: 모든 분양"
-            naver_info = "\n📊 네이버 API 시장분석 포함" if naver_results else ""
-            execution_info = f"\n🔧 실행 방식: {execution_type}"
-            
-            result_message = f"작업 완료!\n\n수집된 분양정보: {total_count}건\n생성된 파일: {os.path.basename(excel_file)}\n전송된 이메일: {len(recipients)}명{filter_info}{naver_info}{execution_info}"
-            
-            if success:
-                if not is_scheduled:  # 수동 실행일 때만 메시지박스 표시
-                    self.root.after(0, lambda: messagebox.showinfo("작업 완료", result_message))
-                self.root.after(0, lambda: self.log_message(f"✅ {execution_type} 작업이 성공적으로 완료되었습니다."))
-            else:
-                if not is_scheduled:  # 수동 실행일 때만 메시지박스 표시
-                    self.root.after(0, lambda: messagebox.showerror("이메일 전송 실패", f"분양정보 수집은 완료되었으나 이메일 전송에 실패했습니다.\n\n{message}"))
-                self.root.after(0, lambda: self.log_message(f"❌ {execution_type} 이메일 전송 실패: {message}"))
-                
-        except Exception as e:
-            execution_type = "스케줄" if is_scheduled else "수동"
-            error_msg = f"{execution_type} 시스템 실행 오류: {str(e)}"
-            if not is_scheduled:  # 수동 실행일 때만 메시지박스 표시
-                self.root.after(0, lambda: messagebox.showerror("실행 오류", error_msg))
-            self.root.after(0, lambda: self.log_message(f"❌ {error_msg}"))
-            
-        finally:
-            self.root.after(0, self._reset_ui)
-    
-    def run_system(self):
-        """시스템 실행 (수동)"""
-        if self.is_running:
-            messagebox.showwarning("실행 중", "시스템이 이미 실행 중입니다.")
-            return
-        
-        # 설정 검증
-        recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
-        
-        if not self.api_key_var.get().strip():
-            messagebox.showerror("설정 오류", "공공데이터포털 인증키를 입력해주세요.")
-            return
-        
-        if not self.sender_email_var.get().strip() or not self.app_password_var.get().strip():
-            messagebox.showerror("설정 오류", "이메일 설정을 완료해주세요.")
-            return
-        
-        if not recipients:
-            messagebox.showerror("설정 오류", "수신자 이메일을 추가해주세요.")
-            return
-        
-        # 날짜 필터링 상태 확인
-        date_filter_enabled = self.date_filter_enabled_var.get()
-        filter_status = "진행중/예정 분양만" if date_filter_enabled else "모든 분양"
-        
-        self.log_message("=== 수동 청약 분양정보 수집 시작 ===")
-        self.log_message(f"🔍 필터링 설정: {filter_status}")
-        self.is_running = True
-        self.run_btn.config(state='disabled', text='실행 중...')
-        
-        # 별도 스레드에서 실행
-        threading.Thread(target=self._run_system_thread, args=(False,), daemon=True).start()
     
     def create_enhanced_button_section(self, parent, start_row):
         """강화된 버튼 섹션 (네이버 API 기능 포함)"""
@@ -1041,157 +580,11 @@ class SubscriptionGUI:
             self.kakao_api_key_entry.config(state='disabled')
     
     def toggle_schedule_settings(self):
-        """스케줄 설정 활성화/비활성화 및 스케줄러 업데이트"""
-        is_enabled = self.schedule_enabled_var.get()
-        
-        if is_enabled:
+        """스케줄 설정 활성화/비활성화"""
+        if self.schedule_enabled_var.get():
             self.schedule_time_entry.config(state='normal')
-            self.log_message("📅 스케줄 실행 활성화")
         else:
             self.schedule_time_entry.config(state='disabled')
-            self.log_message("📅 스케줄 실행 비활성화")
-        
-        # 스케줄러 업데이트
-        self._update_scheduler_settings()
-    
-    def _update_scheduler_settings(self):
-        """스케줄러 설정 업데이트"""
-        try:
-            if not self.scheduler:
-                return
-            
-            is_enabled = self.schedule_enabled_var.get()
-            target_time = self.schedule_time_var.get().strip()
-            
-            # 상세 로그
-            self.log_message(f"📅 스케줄러 설정 업데이트: {'활성화' if is_enabled else '비활성화'}, 시간: {target_time}")
-            
-            if is_enabled and target_time:
-                # 시간 형식 검증
-                try:
-                    hour, minute = map(int, target_time.split(':'))
-                    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-                        raise ValueError("잘못된 시간 범위")
-                    
-                    self.scheduler.set_schedule(True, target_time)
-                    self.log_message(f"✅ 스케줄 설정 완료: 매일 {target_time}에 자동 실행")
-                    
-                except ValueError as e:
-                    self.log_message(f"❌ 시간 형식 오류: {target_time} - HH:MM 형식으로 입력하세요")
-                    # 체크박스 비활성화
-                    self.schedule_enabled_var.set(False)
-                    self.schedule_time_entry.config(state='disabled')
-                    return
-            else:
-                self.scheduler.set_schedule(False, target_time)
-                self.log_message("📅 스케줄 실행 중지")
-                
-        except Exception as e:
-            self.log_message(f"❌ 스케줄러 설정 오류: {e}")
-    
-    def load_config_to_ui_with_naver(self):
-        """설정 데이터를 UI에 로드 (네이버 API 및 스케줄러 포함)"""
-        try:
-            # API 설정
-            api_config = self.config_data.get('api', {})
-            self.api_key_var.set(api_config.get('service_key', ''))
-            
-            # 네이버 API 설정 로드
-            naver_config = self.config_data.get('naver_api', {})
-            self.naver_enabled_var.set(naver_config.get('enabled', False))
-            self.naver_client_id_var.set(naver_config.get('client_id', ''))
-            self.naver_client_secret_var.set(naver_config.get('client_secret', ''))
-            self.toggle_naver_settings()
-            
-            # 필터 설정 로드
-            filter_config = self.config_data.get('filter', {})
-            self.date_filter_enabled_var.set(filter_config.get('date_filter_enabled', True))
-            
-            # 이메일 설정
-            email_config = self.config_data.get('email', {})
-            self.sender_email_var.set(email_config.get('sender_email', ''))
-            self.app_password_var.set(email_config.get('app_password', ''))
-            
-            # 수신자 목록 로드
-            self.recipients_listbox.delete(0, tk.END)
-            recipients = email_config.get('recipients', [])
-            for recipient in recipients:
-                if recipient and recipient.strip():
-                    self.recipients_listbox.insert(tk.END, recipient.strip())
-            
-            # 카카오톡 설정
-            kakao_config = self.config_data.get('kakao', {})
-            self.kakao_enabled_var.set(kakao_config.get('enabled', False))
-            self.kakao_api_key_var.set(kakao_config.get('api_key', ''))
-            self.toggle_kakao_settings()
-            
-            # 스케줄 설정
-            schedule_config = self.config_data.get('schedule', {})
-            self.schedule_enabled_var.set(schedule_config.get('enabled', False))
-            self.schedule_time_var.set(schedule_config.get('time', '09:00'))
-            self.toggle_schedule_settings()  # 스케줄러도 함께 업데이트
-            
-            self.log_message("✅ 설정 UI 로드 완료 (네이버 API, 날짜 필터링, 스케줄러 포함)")
-            
-        except Exception as e:
-            self.log_message(f"❌ UI 로드 오류: {e}")
-    
-    def save_settings_with_naver(self):
-        """설정 저장 (네이버 API, 날짜 필터링, 스케줄러 포함)"""
-        try:
-            # 수신자 목록 수집
-            recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
-            
-            config_data = {
-                'api': {
-                    'service_key': self.api_key_var.get().strip(),
-                    'max_rows': 50
-                },
-                'naver_api': {
-                    'enabled': self.naver_enabled_var.get(),
-                    'client_id': self.naver_client_id_var.get().strip(),
-                    'client_secret': self.naver_client_secret_var.get().strip()
-                },
-                'filter': {
-                    'date_filter_enabled': self.date_filter_enabled_var.get()
-                },
-                'email': {
-                    'sender_email': self.sender_email_var.get().strip(),
-                    'app_password': self.app_password_var.get().strip(),
-                    'recipients': recipients
-                },
-                'kakao': {
-                    'enabled': self.kakao_enabled_var.get(),
-                    'api_key': self.kakao_api_key_var.get().strip()
-                },
-                'schedule': {
-                    'enabled': self.schedule_enabled_var.get(),
-                    'time': self.schedule_time_var.get().strip()
-                }
-            }
-            
-            # 설정 유효성 검증
-            is_valid, errors = self.config_manager.validate_config(config_data)
-            if not is_valid:
-                error_message = "설정 오류:\n" + "\n".join(errors)
-                messagebox.showerror("설정 저장 실패", error_message)
-                return
-            
-            # 설정 저장
-            if self.config_manager.save_config(config_data):
-                messagebox.showinfo("설정 저장", "설정이 성공적으로 저장되었습니다.")
-                self.log_message("💾 설정 저장 완료 (네이버 API, 날짜 필터링, 스케줄러 포함)")
-                self.config_data = config_data
-                
-                # 스케줄러 설정 즉시 적용
-                self._update_scheduler_settings()
-            else:
-                messagebox.showerror("설정 저장 실패", "설정 저장 중 오류가 발생했습니다.")
-                
-        except Exception as e:
-            error_msg = f"설정 저장 오류: {str(e)}"
-            messagebox.showerror("오류", error_msg)
-            self.log_message(error_msg)
     
     def add_recipient(self):
         """수신자 이메일 추가"""
@@ -1568,6 +961,148 @@ class SubscriptionGUI:
         
         threading.Thread(target=analysis_thread, daemon=True).start()
     
+    def run_system(self):
+        """시스템 실행"""
+        if self.is_running:
+            messagebox.showwarning("실행 중", "시스템이 이미 실행 중입니다.")
+            return
+        
+        # 설정 검증
+        recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
+        
+        if not self.api_key_var.get().strip():
+            messagebox.showerror("설정 오류", "공공데이터포털 인증키를 입력해주세요.")
+            return
+        
+        if not self.sender_email_var.get().strip() or not self.app_password_var.get().strip():
+            messagebox.showerror("설정 오류", "이메일 설정을 완료해주세요.")
+            return
+        
+        if not recipients:
+            messagebox.showerror("설정 오류", "수신자 이메일을 추가해주세요.")
+            return
+        
+        # 날짜 필터링 상태 확인
+        date_filter_enabled = self.date_filter_enabled_var.get()
+        filter_status = "진행중/예정 분양만" if date_filter_enabled else "모든 분양"
+        
+        self.log_message("=== 청약 분양정보 수집 시작 ===")
+        self.log_message(f"🔍 필터링 설정: {filter_status}")
+        self.is_running = True
+        self.run_btn.config(state='disabled', text='실행 중...')
+        
+        # 별도 스레드에서 실행
+        threading.Thread(target=self._run_system_thread, daemon=True).start()
+    
+    def _run_system_thread(self):
+        """시스템 실행 스레드"""
+        try:
+            # 진행상태 업데이트
+            self.update_progress(10, "API 연결 중...")
+            
+            # API 초기화
+            api = PublicDataAPI(self.api_key_var.get().strip())
+            
+            self.update_progress(20, "분양정보 수집 중...")
+            
+            # 날짜 필터링 설정
+            date_filter_enabled = self.date_filter_enabled_var.get()
+            
+            # 분양정보 수집 (날짜 필터링 적용)
+            data = api.get_comprehensive_data(max_rows=50, date_filter=date_filter_enabled)
+            
+            self.update_progress(40, "엑셀 파일 생성 중...")
+            
+            # 엑셀 파일 생성
+            excel_handler = ExcelHandler()
+            excel_file = excel_handler.create_excel_file(data)
+            
+            # 네이버 API 분석 (옵션)
+            naver_results = None
+            if self.naver_enabled_var.get() and self.naver_client_id_var.get().strip() and self.naver_client_secret_var.get().strip():
+                try:
+                    self.update_progress(50, "네이버 API 시장 분석 중...")
+                    
+                    from api.subscription_with_naver import SubscriptionNaverIntegration
+                    
+                    integration = SubscriptionNaverIntegration(
+                        self.naver_client_id_var.get().strip(),
+                        self.naver_client_secret_var.get().strip()
+                    )
+                    
+                    naver_results = {}
+                    
+                    # 뉴스 검색
+                    self.update_progress(55, "관련 뉴스 검색 중...")
+                    news_results = integration.search_related_news("분양", "")
+                    if news_results:
+                        naver_results['news_search'] = news_results
+                    
+                    # 시장 동향 분석 (서울 기준)
+                    self.update_progress(60, "시장 동향 분석 중...")
+                    trends = integration.search_market_trends("서울")
+                    if trends:
+                        naver_results['market_trends'] = trends
+                    
+                    # 종합 분석 보고서
+                    self.update_progress(65, "종합 분석 보고서 생성 중...")
+                    report = integration.get_comprehensive_market_report(data)
+                    if report:
+                        naver_results['comprehensive_report'] = report
+                    
+                    self.root.after(0, lambda: self.log_message("✅ 네이버 API 분석 완료"))
+                    
+                except Exception as e:
+                    self.root.after(0, lambda: self.log_message(f"⚠️ 네이버 API 분석 오류: {e}"))
+                    naver_results = None
+            
+            self.update_progress(70, "이메일 전송 중...")
+            
+            # 이메일 전송 (네이버 API 결과 포함)
+            email_sender = EmailSender()
+            recipients = [self.recipients_listbox.get(i) for i in range(self.recipients_listbox.size())]
+            
+            success, message = email_sender.send_subscription_email(
+                self.sender_email_var.get().strip(),
+                self.app_password_var.get().strip(),
+                recipients,
+                excel_file,
+                data,
+                naver_results  # 네이버 API 결과 추가
+            )
+            
+            self.update_progress(90, "카카오톡 알림 전송 중...")
+            
+            # 카카오톡 알림 (옵션)
+            if self.kakao_enabled_var.get() and self.kakao_api_key_var.get().strip():
+                kakao_api = create_kakao_api(self.kakao_api_key_var.get().strip(), True)
+                kakao_success, kakao_message = kakao_api.send_subscription_notification(data)
+                self.root.after(0, lambda: self.log_message(f"카카오톡 알림: {kakao_message}"))
+            
+            self.update_progress(100, "완료!")
+            
+            # 결과 표시
+            total_count = sum(len(items) for items in data.values())
+            filter_info = "\n📅 필터링: 진행중/예정 분양만" if date_filter_enabled else "\n📅 필터링: 모든 분양"
+            naver_info = "\n📊 네이버 API 시장분석 포함" if naver_results else ""
+            
+            result_message = f"작업 완료!\n\n수집된 분양정보: {total_count}건\n생성된 파일: {os.path.basename(excel_file)}\n전송된 이메일: {len(recipients)}명{filter_info}{naver_info}"
+            
+            if success:
+                self.root.after(0, lambda: messagebox.showinfo("작업 완료", result_message))
+                self.root.after(0, lambda: self.log_message("✅ 모든 작업이 성공적으로 완료되었습니다."))
+            else:
+                self.root.after(0, lambda: messagebox.showerror("이메일 전송 실패", f"분양정보 수집은 완료되었으나 이메일 전송에 실패했습니다.\n\n{message}"))
+                self.root.after(0, lambda: self.log_message(f"❌ 이메일 전송 실패: {message}"))
+                
+        except Exception as e:
+            error_msg = f"시스템 실행 오류: {str(e)}"
+            self.root.after(0, lambda: messagebox.showerror("실행 오류", error_msg))
+            self.root.after(0, lambda: self.log_message(f"❌ {error_msg}"))
+            
+        finally:
+            self.root.after(0, self._reset_ui)
+    
     def _reset_ui(self):
         """UI 상태 리셋"""
         self.is_running = False
@@ -1587,9 +1122,8 @@ class SubscriptionGUI:
         log_entry = f"[{timestamp}] {message}\n"
         
         def update_log():
-            if hasattr(self, 'log_text'):
-                self.log_text.insert(tk.END, log_entry)
-                self.log_text.see(tk.END)
+            self.log_text.insert(tk.END, log_entry)
+            self.log_text.see(tk.END)
         
         if threading.current_thread() == threading.main_thread():
             update_log()
@@ -1597,8 +1131,7 @@ class SubscriptionGUI:
             self.root.after(0, update_log)
         
         # 파일 로그에도 기록
-        if hasattr(self, 'logger'):
-            self.logger.info(message)
+        self.logger.info(message)
     
     def clear_log(self):
         """로그 지우기"""
@@ -1606,47 +1139,19 @@ class SubscriptionGUI:
         self.log_message("로그가 초기화되었습니다.")
     
     def on_closing(self):
-        """창 닫기 이벤트 (스케줄러 종료 포함)"""
-        try:
-            if self.is_running:
-                if messagebox.askokcancel("종료 확인", "시스템이 실행 중입니다. 정말 종료하시겠습니까?"):
-                    self.log_message("🔄 프로그램 종료 중...")
-                    
-                    # 스케줄러 종료
-                    if self.scheduler:
-                        self.scheduler.stop_scheduler()
-                        self.log_message("📅 스케줄러 종료")
-                    
-                    self.logger.info("사용자에 의해 프로그램 종료")
-                    self.root.destroy()
-            else:
-                self.log_message("🔄 프로그램 종료 중...")
-                
-                # 스케줄러 종료
-                if self.scheduler:
-                    self.scheduler.stop_scheduler()
-                    self.log_message("📅 스케줄러 종료")
-                
-                self.logger.info("프로그램 정상 종료")
+        """창 닫기 이벤트"""
+        if self.is_running:
+            if messagebox.askokcancel("종료 확인", "시스템이 실행 중입니다. 정말 종료하시겠습니까?"):
+                self.logger.info("사용자에 의해 프로그램 종료")
                 self.root.destroy()
-                
-        except Exception as e:
-            self.logger.error(f"프로그램 종료 중 오류: {e}")
+        else:
+            self.logger.info("프로그램 정상 종료")
             self.root.destroy()
     
     def run(self):
         """GUI 애플리케이션 실행"""
-        self.log_message("🚀 청약 분양정보 자동화 시스템이 시작되었습니다.")
-        self.log_message("📝 설정을 확인하고 '실행' 버튼을 클릭하세요.")
-        
-        # 스케줄러 상태 로그
-        if self.scheduler:
-            status = self.scheduler.get_status()
-            if status['is_enabled']:
-                self.log_message(f"📅 스케줄러 활성화: {status['target_time']} 매일 실행")
-            else:
-                self.log_message("📅 스케줄러 비활성화")
-        
+        self.log_message("청약 분양정보 자동화 시스템이 시작되었습니다.")
+        self.log_message("설정을 확인하고 '실행' 버튼을 클릭하세요.")
         self.root.mainloop()
 
 def main():
