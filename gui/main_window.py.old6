@@ -772,9 +772,8 @@ class SubscriptionGUI:
         self.schedule_time_entry.grid(row=start_row+2, column=2, sticky=tk.W, padx=5)
         self.schedule_time_entry.config(state='disabled')
         
-        # 시간 입력 완료 시에만 검증 (Enter 키 또는 포커스 아웃)
-        self.schedule_time_entry.bind('<Return>', self._on_time_entry_complete)
-        self.schedule_time_entry.bind('<FocusOut>', self._on_time_entry_complete)
+        # 스케줄 시간 변경 시 스케줄러 업데이트
+        self.schedule_time_var.trace('w', lambda *args: self._update_scheduler_settings())
         
         ttk.Label(parent, text="매일").grid(row=start_row+2, column=2, sticky=tk.W, padx=(80, 5))
         
@@ -786,12 +785,6 @@ class SubscriptionGUI:
         # 스케줄 테스트 버튼
         self.test_schedule_btn = ttk.Button(parent, text="🧪 스케줄 테스트", command=self.test_scheduled_execution)
         self.test_schedule_btn.grid(row=start_row+3, column=2, sticky=tk.E, padx=5)
-
-    def _on_time_entry_complete(self, event=None):
-        """시간 입력 완료 시 호출되는 메서드"""
-        # 스케줄이 활성화된 상태에서만 검증
-        if self.schedule_enabled_var.get():
-            self._update_scheduler_settings()
     
     def test_scheduled_execution(self):
         """스케줄 실행 테스트"""
@@ -1048,24 +1041,21 @@ class SubscriptionGUI:
             self.kakao_api_key_entry.config(state='disabled')
     
     def toggle_schedule_settings(self):
-        """스케줄 설정 활성화/비활성화"""
+        """스케줄 설정 활성화/비활성화 및 스케줄러 업데이트"""
         is_enabled = self.schedule_enabled_var.get()
         
         if is_enabled:
             self.schedule_time_entry.config(state='normal')
             self.log_message("📅 스케줄 실행 활성화")
-            # 활성화 시 즉시 스케줄러 설정 검증
-            self._update_scheduler_settings()
         else:
             self.schedule_time_entry.config(state='disabled')
             self.log_message("📅 스케줄 실행 비활성화")
-            # 비활성화 시 스케줄러 중지
-            if self.scheduler:
-                self.scheduler.set_schedule(False, "")
-                self.log_message("📅 스케줄 실행 중지")
-
+        
+        # 스케줄러 업데이트
+        self._update_scheduler_settings()
+    
     def _update_scheduler_settings(self):
-        """스케줄러 설정 업데이트 (개선된 버전)"""
+        """스케줄러 설정 업데이트"""
         try:
             if not self.scheduler:
                 return
@@ -1073,52 +1063,31 @@ class SubscriptionGUI:
             is_enabled = self.schedule_enabled_var.get()
             target_time = self.schedule_time_var.get().strip()
             
-            # 스케줄이 비활성화된 경우
-            if not is_enabled:
-                self.scheduler.set_schedule(False, target_time)
-                return
+            # 상세 로그
+            self.log_message(f"📅 스케줄러 설정 업데이트: {'활성화' if is_enabled else '비활성화'}, 시간: {target_time}")
             
-            # 스케줄이 활성화된 경우 시간 검증
-            if target_time:
+            if is_enabled and target_time:
+                # 시간 형식 검증
                 try:
-                    # 시간 형식 검증
                     hour, minute = map(int, target_time.split(':'))
                     if not (0 <= hour <= 23 and 0 <= minute <= 59):
                         raise ValueError("잘못된 시간 범위")
                     
-                    # 올바른 형식이면 스케줄러 설정
                     self.scheduler.set_schedule(True, target_time)
                     self.log_message(f"✅ 스케줄 설정 완료: 매일 {target_time}에 자동 실행")
                     
-                except ValueError:
-                    # 시간 형식이 잘못된 경우 경고만 표시 (체크박스는 유지)
-                    self.log_message(f"⚠️ 시간 형식 확인 필요: {target_time} (HH:MM 형식으로 입력하세요)")
-                    # 스케줄러는 비활성화하지만 UI는 그대로 유지
-                    if self.scheduler:
-                        self.scheduler.set_schedule(False, target_time)
+                except ValueError as e:
+                    self.log_message(f"❌ 시간 형식 오류: {target_time} - HH:MM 형식으로 입력하세요")
+                    # 체크박스 비활성화
+                    self.schedule_enabled_var.set(False)
+                    self.schedule_time_entry.config(state='disabled')
+                    return
             else:
-                # 시간이 비어있는 경우
-                self.log_message("⚠️ 실행 시간을 입력하세요 (예: 09:00)")
-                if self.scheduler:
-                    self.scheduler.set_schedule(False, target_time)
+                self.scheduler.set_schedule(False, target_time)
+                self.log_message("📅 스케줄 실행 중지")
                 
         except Exception as e:
             self.log_message(f"❌ 스케줄러 설정 오류: {e}")
-
-    def _validate_time_format(self, time_str):
-        """시간 형식 검증 (별도 메서드)"""
-        try:
-            if not time_str or ':' not in time_str:
-                return False, "HH:MM 형식으로 입력하세요"
-            
-            hour, minute = map(int, time_str.split(':'))
-            if not (0 <= hour <= 23 and 0 <= minute <= 59):
-                return False, "올바른 시간 범위를 입력하세요 (00:00-23:59)"
-            
-            return True, f"올바른 시간 형식: {time_str}"
-            
-        except ValueError:
-            return False, "숫자로 입력하세요 (예: 09:00)"
     
     def load_config_to_ui_with_naver(self):
         """설정 데이터를 UI에 로드 (네이버 API 및 스케줄러 포함)"""
